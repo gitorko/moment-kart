@@ -33,14 +33,14 @@ export function checkPassword(password, stored) {
   return candidate.length === expected.length && timingSafeEqual(candidate, expected);
 }
 
-export function createToken(user) {
+export function createToken(user, ttlMs = TOKEN_TTL_MS) {
   const payload = Buffer.from(
     JSON.stringify({
       uid: user.id,
       email: user.email,
       name: user.name,
       admin: isAdminEmail(user.email),
-      exp: Date.now() + TOKEN_TTL_MS,
+      exp: Date.now() + ttlMs,
     })
   ).toString('base64url');
   const sig = createHmac('sha256', SECRET).update(payload).digest('base64url');

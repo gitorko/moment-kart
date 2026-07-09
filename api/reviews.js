@@ -56,6 +56,7 @@ async function reviewsHandler(req, res) {
   if (req.method === 'POST') {
     const user = requireAuth(req, res);
     if (!user) return;
+    if (user.admin) return res.status(403).json({ error: 'The admin cannot review products' });
     const { productId, rating, text } = req.body || {};
     const stars = parseInt(rating, 10);
     if (!productId || !Number.isInteger(stars) || stars < 1 || stars > 5) {

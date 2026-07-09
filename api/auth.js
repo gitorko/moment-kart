@@ -6,12 +6,10 @@ import { log, logError } from './_log.js';
 
 const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
-// Verification codes are never returned to the client. In production they're
-// emailed; if email isn't configured yet, ALLOW_DEV_OTP=true logs the code to
-// Vercel's function logs instead (Dashboard → Deployments → Logs, or `vercel logs`).
+// Verification codes are never returned to the client — they're emailed.
 async function issueCode(sql, email) {
   const isProd = process.env.VERCEL_ENV === 'production';
-  if (isProd && !process.env.RESEND_API_KEY && process.env.ALLOW_DEV_OTP !== 'true') {
+  if (isProd && !process.env.RESEND_API_KEY) {
     const err = new Error('Email service is not configured — signup is unavailable');
     err.statusCode = 503;
     throw err;
@@ -24,9 +22,10 @@ async function issueCode(sql, email) {
     VALUES (${email}, ${code}, ${expiresAt})
     ON CONFLICT (email) DO UPDATE SET code = ${code}, expires_at = ${expiresAt}
   `;
+  // Always log the code so it can be recovered from the function logs
+  // (Vercel → Deployments → Logs) if the email doesn't arrive.
   const { sent } = await sendVerificationEmail(email, code);
-  if (!sent) log('verification_code_issued', { email, code });
-  else log('verification_email_sent', { email });
+  log('verification_code_issued', { email, code, emailed: sent });
 }
 
 export default async function handler(req, res) {

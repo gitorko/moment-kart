@@ -12,6 +12,12 @@ export default async function handler(req, res) {
   }
 }
 
+// Event tags ("birthday", "rakhi", …) — lowercase, deduped, max 12 per product.
+const normalizeTags = (tags) =>
+  Array.isArray(tags)
+    ? [...new Set(tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 12)
+    : [];
+
 async function productsHandler(req, res) {
   const sql = db();
   await ensureSchema(sql);
@@ -19,7 +25,7 @@ async function productsHandler(req, res) {
   if (req.method === 'GET') {
     // Public: the shop needs the catalog without login.
     const rows = await sql`
-      SELECT id, name, description, price_paise, image_url, customizable, custom_label, in_stock
+      SELECT id, name, description, price_paise, image_url, customizable, custom_label, in_stock, tags
       FROM products ORDER BY created_at DESC
     `;
     return res.json(rows);
@@ -35,9 +41,10 @@ async function productsHandler(req, res) {
     }
     const id = randomUUID();
     await sql`
-      INSERT INTO products (id, name, description, price_paise, image_url, customizable, custom_label, in_stock)
+      INSERT INTO products (id, name, description, price_paise, image_url, customizable, custom_label, in_stock, tags)
       VALUES (${id}, ${p.name}, ${p.description || ''}, ${p.price_paise}, ${p.image_url || ''},
-              ${!!p.customizable}, ${p.custom_label || 'Your message'}, ${p.in_stock !== false})
+              ${!!p.customizable}, ${p.custom_label || 'Your message'}, ${p.in_stock !== false},
+              ${JSON.stringify(normalizeTags(p.tags))})
     `;
     log('product_created', { productId: id, name: p.name, by: admin.email });
     return res.status(201).json({ id });
@@ -53,7 +60,8 @@ async function productsHandler(req, res) {
       UPDATE products SET
         name = ${p.name}, description = ${p.description || ''}, price_paise = ${p.price_paise},
         image_url = ${p.image_url || ''}, customizable = ${!!p.customizable},
-        custom_label = ${p.custom_label || 'Your message'}, in_stock = ${p.in_stock !== false}
+        custom_label = ${p.custom_label || 'Your message'}, in_stock = ${p.in_stock !== false},
+        tags = ${JSON.stringify(normalizeTags(p.tags))}
       WHERE id = ${p.id}
     `;
     log('product_updated', { productId: p.id, name: p.name, inStock: p.in_stock !== false, by: admin.email });

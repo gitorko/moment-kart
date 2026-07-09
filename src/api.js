@@ -87,13 +87,23 @@ function devCurrentUser() {
   }
 }
 
-// Verification codes are never shown in the UI. In dev mode (no email provider),
-// they're logged to the browser console so you can still test the flow locally.
+// Dev emails go through the Vite dev server (/api/dev-email, see vite.config.js):
+// it prints OTP codes to the `npm run dev` terminal + dev-emails.log, and sends
+// the real email via Resend when RESEND_API_KEY is set in .env.local.
+function devSendEmail(payload) {
+  return fetch('/api/dev-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+
+// Verification codes are never shown in the UI — check the dev server terminal.
 function issueDevCode(codes, email) {
   const code = String(Math.floor(100000 + Math.random() * 900000));
   codes[email] = code;
   write(CODES_KEY, codes);
-  console.info(`[moment-kart dev] verification code for ${email}: ${code}`);
+  devSendEmail({ kind: 'verification', to: email, code });
   return code;
 }
 
@@ -110,7 +120,7 @@ export async function authAction(body) {
   if (body.action === 'signup') {
     if (user?.verified) return { ok: false, data: { error: 'Account already exists — please login' } };
     const next = users.filter((u) => u.email !== email);
-    next.push({ id: user?.id || uid(), email, name: body.name, password: body.password, verified: false, address: null });
+    next.push({ id: user?.id || uid(), email, name: body.name, password: body.password, verified: false, address: null, created_at: new Date().toISOString() });
     write(USERS_KEY, next);
     issueDevCode(codes, email);
     return { ok: true, data: {} };
@@ -239,8 +249,9 @@ export async function placeOrder({ items, address, upi_ref }) {
     verifiedItems.push({ productId: product.id, name: product.name, price_paise: product.price_paise, qty, message: product.customizable ? String(item.message || '').slice(0, 200) : '' });
   }
   const orders = read(ORDERS_KEY, []);
+  const orderNo = Math.max(1000, ...orders.map((o) => Number(o.order_no) || 0)) + 1;
   orders.unshift({
-    id: uid(), user_email: me?.email, user_name: me?.name,
+    id: uid(), order_no: orderNo, user_email: me?.email, user_name: me?.name,
     items: verifiedItems, address, total_paise: total,
     upi_ref, status: 'pending', created_at: new Date().toISOString(),
   });
@@ -305,10 +316,87 @@ export async function setOrderStatus(id, status, extra = {}) {
     if (status === 'shipped') {
       order.courier = extra.courier;
       order.tracking_id = extra.tracking_id;
+      devSendEmail({
+        kind: 'shipped',
+        to: order.user_email,
+        order: {
+          order_no: order.order_no,
+          name: order.user_name,
+          items: order.items,
+          courier: order.courier,
+          tracking_id: order.tracking_id,
+          address: order.address,
+        },
+      });
     }
   }
   write(ORDERS_KEY, orders);
   return { ok: true, data: {} };
+}
+
+// Admin: permanently delete orders (frees database space).
+// Only fulfilled orders can be deleted — active ones must run their course.
+export async function deleteOrders(ids) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'DELETE', body: JSON.stringify({ ids }) }));
+  const idSet = new Set(ids);
+  const orders = read(ORDERS_KEY, []);
+  const next = orders.filter((o) => !(idSet.has(o.id) && o.status === 'fulfilled'));
+  write(ORDERS_KEY, next);
+  const deleted = orders.length - next.length;
+  return { ok: true, data: { deleted, skipped: ids.length - deleted } };
+}
+
+// Admin: restore orders from a CSV export.
+export async function importOrders(rows) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders?scope=import', { method: 'POST', body: JSON.stringify({ orders: rows }) }));
+  const orders = read(ORDERS_KEY, []);
+  let imported = 0;
+  let skipped = 0;
+  let nextNo = Math.max(1000, ...orders.map((o) => Number(o.order_no) || 0));
+  for (const row of rows) {
+    if (!row.id || !row.user_email || !Array.isArray(row.items) || !row.address) { skipped++; continue; }
+    const order = {
+      id: row.id, order_no: parseInt(row.order_no, 10) || ++nextNo,
+      user_email: row.user_email, user_name: row.user_name || '',
+      items: row.items, address: row.address, total_paise: parseInt(row.total_paise, 10) || 0,
+      upi_ref: String(row.upi_ref || ''), status: String(row.status || 'pending'),
+      courier: row.courier || undefined, tracking_id: row.tracking_id || undefined,
+      created_at: row.created_at || new Date().toISOString(),
+    };
+    const idx = orders.findIndex((o) => o.id === row.id);
+    if (idx >= 0) orders[idx] = order;
+    else orders.unshift(order);
+    imported++;
+  }
+  write(ORDERS_KEY, orders);
+  return { ok: true, data: { imported, skipped } };
+}
+
+// Admin: get a short-lived token to browse the shop as another user.
+export async function impersonateUser(email) {
+  if (!IS_DEV) {
+    const { ok, data } = await toResult(authFetch('/api/users', { method: 'POST', body: JSON.stringify({ email }) }));
+    return ok ? data.token : null;
+  }
+  const user = read(USERS_KEY, []).find((u) => u.email === String(email).toLowerCase());
+  return user ? devToken(user) : null;
+}
+
+// Admin: list all registered users with their order activity.
+export async function fetchAdminUsers() {
+  if (!IS_DEV) {
+    const res = await authFetch('/api/users');
+    return res.ok ? res.json() : [];
+  }
+  const orders = read(ORDERS_KEY, []);
+  const activity = (email) => {
+    const mine = orders.filter((o) => o.user_email === email);
+    return { order_count: mine.length, spent_paise: mine.reduce((s, o) => s + (o.total_paise || 0), 0) };
+  };
+  return read(USERS_KEY, []).map((u) => ({
+    email: u.email, name: u.name, verified: !!u.verified,
+    created_at: u.created_at || null, ...activity(u.email),
+  }));
 }
 
 // ─── Reviews ──────────────────────────────────────────────────────────────────
@@ -337,6 +425,7 @@ export async function submitReview({ productId, rating, text }) {
   if (!IS_DEV) return toResult(authFetch('/api/reviews', { method: 'POST', body: JSON.stringify({ productId, rating, text }) }));
   const me = devCurrentUser();
   if (!me) return { ok: false, data: { error: 'Please login to review' } };
+  if (me.admin) return { ok: false, data: { error: 'The admin cannot review products' } };
   const reviews = read(REVIEWS_KEY, []);
   reviews.unshift({
     id: uid(), product_id: productId, user_id: me.uid, user_name: me.name,
