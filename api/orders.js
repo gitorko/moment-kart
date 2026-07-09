@@ -1,8 +1,18 @@
 import { randomUUID } from 'crypto';
 import { db, ensureSchema } from './_db.js';
 import { requireAuth, requireAdmin } from './_auth.js';
+import { log, logError } from './_log.js';
 
 export default async function handler(req, res) {
+  try {
+    return await ordersHandler(req, res);
+  } catch (err) {
+    logError('orders_handler_error', err, { method: req.method });
+    return res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+async function ordersHandler(req, res) {
   const sql = db();
   await ensureSchema(sql);
 
@@ -66,13 +76,43 @@ export default async function handler(req, res) {
       VALUES (${id}, ${user.uid}, ${JSON.stringify(verifiedItems)}, ${JSON.stringify(address)},
               ${total}, ${String(upi_ref).trim()})
     `;
+
+    // Save the shipping address into the profile if it's not already there.
+    const [row] = await sql`SELECT address FROM users WHERE id = ${user.uid}`;
+    const saved = Array.isArray(row?.address) ? row.address : row?.address ? [row.address] : [];
+    const key = (a) => `${a.line1}|${a.pincode}`.toLowerCase();
+    if (!saved.some((a) => key(a) === key(address)) && saved.length < 10) {
+      saved.push(address);
+      await sql`UPDATE users SET address = ${JSON.stringify(saved)} WHERE id = ${user.uid}`;
+    }
+
+    log('order_placed', { orderId: id, userId: user.uid, totalPaise: total, itemCount: verifiedItems.length });
     return res.status(201).json({ id, total_paise: total });
   }
 
   if (req.method === 'PUT') {
-    if (!requireAdmin(req, res)) return;
-    const { id, status, courier, tracking_id } = req.body || {};
-    if (!id || !['pending', 'shipped', 'fulfilled'].includes(status)) {
+    const user = requireAuth(req, res);
+    if (!user) return;
+    const { id, status, courier, tracking_id, upi_ref } = req.body || {};
+
+    // Customer path: resubmit payment on their own flagged order.
+    if (upi_ref !== undefined && !status) {
+      if (!id || String(upi_ref).trim().length < 6) {
+        return res.status(400).json({ error: 'Valid UPI transaction reference is required' });
+      }
+      const [order] = await sql`SELECT user_id, status FROM orders WHERE id = ${id}`;
+      if (!order || order.user_id !== user.uid) return res.status(404).json({ error: 'Order not found' });
+      if (order.status !== 'payment_issue') {
+        return res.status(400).json({ error: 'This order is not awaiting payment confirmation' });
+      }
+      await sql`UPDATE orders SET upi_ref = ${String(upi_ref).trim()}, status = 'pending' WHERE id = ${id}`;
+      log('payment_resubmitted', { orderId: id, userId: user.uid });
+      return res.json({ ok: true });
+    }
+
+    // Admin path: status transitions.
+    if (!user.admin) return res.status(403).json({ error: 'Admin only' });
+    if (!id || !['pending', 'payment_issue', 'shipped', 'fulfilled'].includes(status)) {
       return res.status(400).json({ error: 'Order id and a valid status are required' });
     }
     if (status === 'shipped' && (!courier || !String(tracking_id || '').trim())) {
@@ -87,6 +127,7 @@ export default async function handler(req, res) {
     } else {
       await sql`UPDATE orders SET status = ${status} WHERE id = ${id}`;
     }
+    log('order_status_changed', { orderId: id, status, by: user.email });
     return res.json({ ok: true });
   }
 

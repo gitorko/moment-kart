@@ -82,9 +82,29 @@ a { color: inherit; text-decoration: none; }
   font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
 }
 .badge-pending { background: #f3ead9; color: #8a6d3b; }
+.badge-payment_issue { background: #f3e2e0; color: var(--danger); }
 .badge-shipped { background: #dde8ec; color: var(--ocean); }
 .badge-fulfilled { background: #e2ece7; color: var(--ok); }
 .badge-oos { background: #f3e2e0; color: var(--danger); }
+
+/* labeled order details */
+.order-details { margin: 12px 0 0; }
+.order-row { display: flex; gap: 10px; padding: 5px 0; font-size: 14px; }
+.order-row dt {
+  flex: 0 0 96px; font-size: 11px; font-weight: 600; color: var(--slate);
+  text-transform: uppercase; letter-spacing: 0.08em; padding-top: 2px;
+}
+.order-row dd { margin: 0; flex: 1; color: var(--ink); }
+.order-sublabel {
+  font-size: 11px; font-weight: 600; color: var(--slate);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+
+.payment-issue-box {
+  margin-top: 12px; padding: 14px;
+  background: #faf1ef; border: 1px solid #e0c3bf; border-radius: 2px;
+  color: var(--danger);
+}
 
 .ship-form {
   display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;

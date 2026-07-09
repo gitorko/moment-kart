@@ -4,18 +4,14 @@ import { createHmac, timingSafeEqual, scryptSync, randomBytes } from 'crypto';
 const SECRET = process.env.AUTH_SECRET || 'moment-kart-dev-secret-change-me';
 const TOKEN_TTL_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
 
+// The site has a single admin, defined by ADMIN_EMAIL + ADMIN_PASSWORD env vars.
 export function isAdminEmail(email) {
-  const admins = (process.env.ADMIN_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean);
-  const builtIn = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
-  if (builtIn) admins.push(builtIn);
-  return admins.includes(String(email).toLowerCase());
+  const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  return !!adminEmail && String(email).toLowerCase() === adminEmail;
 }
 
-// The built-in admin is defined by ADMIN_EMAIL + ADMIN_PASSWORD env vars and
-// needs no signup or email verification.
+// The admin needs no signup or email verification — logging in with these
+// credentials is what defines the account.
 export function isBuiltInAdmin(email, password) {
   const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
   const adminPass = process.env.ADMIN_PASSWORD;

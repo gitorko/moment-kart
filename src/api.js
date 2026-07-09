@@ -1,6 +1,6 @@
 // Data layer. In production every call hits the Vercel serverless APIs (Postgres).
 // In local dev (`npm run dev`) everything is served from localStorage — no backend,
-// no database, and the email verification code is shown on screen.
+// no database needed to iterate on the UI.
 
 export const IS_DEV = !import.meta.env.PROD;
 
@@ -54,12 +54,13 @@ const REVIEWS_KEY = 'mk-dev-reviews';
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
 
-// Default dev admin credentials come from .env.local (VITE_ADMIN_EMAIL / VITE_ADMIN_PASSWORD).
-const DEV_ADMIN_EMAIL = (import.meta.env.VITE_ADMIN_EMAIL || 'admin@momentkart.dev').toLowerCase();
-const DEV_ADMIN_PASSWORD = import.meta.env.VITE_ADMIN_PASSWORD || 'admin123';
+// Dev admin credentials come from .env.local (ADMIN_EMAIL / ADMIN_PASSWORD —
+// the same names used in Vercel for production). Injected by vite.config.js in dev only.
+export const DEV_ADMIN_EMAIL = (typeof __DEV_ADMIN_EMAIL__ !== 'undefined' ? __DEV_ADMIN_EMAIL__ : '').toLowerCase();
+const DEV_ADMIN_PASSWORD = typeof __DEV_ADMIN_PASSWORD__ !== 'undefined' ? __DEV_ADMIN_PASSWORD__ : '';
 
 function devIsAdmin(email) {
-  return email.toLowerCase() === DEV_ADMIN_EMAIL;
+  return !!DEV_ADMIN_EMAIL && email.toLowerCase() === DEV_ADMIN_EMAIL;
 }
 
 function devToken(user) {
@@ -86,6 +87,16 @@ function devCurrentUser() {
   }
 }
 
+// Verification codes are never shown in the UI. In dev mode (no email provider),
+// they're logged to the browser console so you can still test the flow locally.
+function issueDevCode(codes, email) {
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  codes[email] = code;
+  write(CODES_KEY, codes);
+  console.info(`[moment-kart dev] verification code for ${email}: ${code}`);
+  return code;
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export async function authAction(body) {
@@ -101,17 +112,13 @@ export async function authAction(body) {
     const next = users.filter((u) => u.email !== email);
     next.push({ id: user?.id || uid(), email, name: body.name, password: body.password, verified: false, address: null });
     write(USERS_KEY, next);
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    codes[email] = code;
-    write(CODES_KEY, codes);
-    return { ok: true, data: { devCode: code } };
+    issueDevCode(codes, email);
+    return { ok: true, data: {} };
   }
   if (body.action === 'resend') {
     if (!user) return { ok: false, data: { error: 'No account found — please signup' } };
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    codes[email] = code;
-    write(CODES_KEY, codes);
-    return { ok: true, data: { devCode: code } };
+    issueDevCode(codes, email);
+    return { ok: true, data: {} };
   }
   if (body.action === 'verify') {
     if (!user || codes[email] !== String(body.code)) return { ok: false, data: { error: 'Invalid verification code' } };
@@ -121,17 +128,30 @@ export async function authAction(body) {
     write(CODES_KEY, codes);
     return { ok: true, data: { token: devToken(user) } };
   }
+  if (body.action === 'forgot') {
+    if (!user) return { ok: true, data: { message: 'If an account exists, a reset code has been sent' } };
+    issueDevCode(codes, email);
+    return { ok: true, data: { message: 'If an account exists, a reset code has been sent' } };
+  }
+  if (body.action === 'reset') {
+    if (String(body.password || '').length < 6) return { ok: false, data: { error: 'Password must be at least 6 characters' } };
+    if (!user || codes[email] !== String(body.code)) return { ok: false, data: { error: 'Invalid reset code' } };
+    user.password = body.password;
+    user.verified = true;
+    write(USERS_KEY, users);
+    delete codes[email];
+    write(CODES_KEY, codes);
+    return { ok: true, data: { token: devToken(user) } };
+  }
   if (body.action === 'login') {
     // Built-in dev admin — no signup or verification needed locally.
-    if (email === DEV_ADMIN_EMAIL && body.password === DEV_ADMIN_PASSWORD) {
+    if (DEV_ADMIN_EMAIL && email === DEV_ADMIN_EMAIL && body.password === DEV_ADMIN_PASSWORD) {
       return { ok: true, data: { token: devToken({ id: 'dev-admin', email, name: 'Admin' }) } };
     }
     if (!user || user.password !== body.password) return { ok: false, data: { error: 'Invalid email or password' } };
     if (!user.verified) {
-      const code = String(Math.floor(100000 + Math.random() * 900000));
-      codes[email] = code;
-      write(CODES_KEY, codes);
-      return { ok: false, data: { error: 'Email not verified', needsVerification: true, devCode: code } };
+      issueDevCode(codes, email);
+      return { ok: false, data: { error: 'Email not verified', needsVerification: true } };
     }
     return { ok: true, data: { token: devToken(user) } };
   }
@@ -225,6 +245,15 @@ export async function placeOrder({ items, address, upi_ref }) {
     upi_ref, status: 'pending', created_at: new Date().toISOString(),
   });
   write(ORDERS_KEY, orders);
+
+  // Save the shipping address into the profile if it's not already there.
+  const profile = await fetchProfile();
+  const saved = profile?.addresses || [];
+  const key = (a) => `${a.line1}|${a.pincode}`.toLowerCase();
+  if (!saved.some((a) => key(a) === key(address)) && saved.length < 10) {
+    await saveProfile({ name: profile?.name || me?.name, addresses: [...saved, address] });
+  }
+
   return { ok: true, data: {} };
 }
 
@@ -245,6 +274,41 @@ export async function fetchAdminOrders(filter) {
   }
   const orders = read(ORDERS_KEY, []);
   return filter === 'all' ? orders : orders.filter((o) => o.status === filter);
+}
+
+// Customer resubmits payment on an order flagged "payment not received".
+export async function resubmitPayment(id, upi_ref) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, upi_ref }) }));
+  if (String(upi_ref || '').trim().length < 6) {
+    return { ok: false, data: { error: 'Valid UPI transaction reference is required' } };
+  }
+  const orders = read(ORDERS_KEY, []);
+  const order = orders.find((o) => o.id === id);
+  if (!order || order.status !== 'payment_issue') {
+    return { ok: false, data: { error: 'This order is not awaiting payment confirmation' } };
+  }
+  order.upi_ref = String(upi_ref).trim();
+  order.status = 'pending';
+  write(ORDERS_KEY, orders);
+  return { ok: true, data: {} };
+}
+
+export async function setOrderStatus(id, status, extra = {}) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, status, ...extra }) }));
+  if (status === 'shipped' && (!extra.courier || !String(extra.tracking_id || '').trim())) {
+    return { ok: false, data: { error: 'Courier name and tracking ID are required to mark shipped' } };
+  }
+  const orders = read(ORDERS_KEY, []);
+  const order = orders.find((o) => o.id === id);
+  if (order) {
+    order.status = status;
+    if (status === 'shipped') {
+      order.courier = extra.courier;
+      order.tracking_id = extra.tracking_id;
+    }
+  }
+  write(ORDERS_KEY, orders);
+  return { ok: true, data: {} };
 }
 
 // ─── Reviews ──────────────────────────────────────────────────────────────────
@@ -308,23 +372,5 @@ export async function updateReview(id, patch) {
 export async function deleteReview(id) {
   if (!IS_DEV) return toResult(authFetch(`/api/reviews?id=${id}`, { method: 'DELETE' }));
   write(REVIEWS_KEY, read(REVIEWS_KEY, []).filter((r) => r.id !== id));
-  return { ok: true, data: {} };
-}
-
-export async function setOrderStatus(id, status, extra = {}) {
-  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, status, ...extra }) }));
-  if (status === 'shipped' && (!extra.courier || !String(extra.tracking_id || '').trim())) {
-    return { ok: false, data: { error: 'Courier name and tracking ID are required to mark shipped' } };
-  }
-  const orders = read(ORDERS_KEY, []);
-  const order = orders.find((o) => o.id === id);
-  if (order) {
-    order.status = status;
-    if (status === 'shipped') {
-      order.courier = extra.courier;
-      order.tracking_id = extra.tracking_id;
-    }
-  }
-  write(ORDERS_KEY, orders);
   return { ok: true, data: {} };
 }

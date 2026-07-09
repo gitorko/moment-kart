@@ -2,10 +2,21 @@ import { randomUUID, randomInt } from 'crypto';
 import { db, ensureSchema } from './_db.js';
 import { hashPassword, checkPassword, createToken, isAdminEmail, isBuiltInAdmin } from './_auth.js';
 import { sendVerificationEmail } from './_email.js';
+import { log, logError } from './_log.js';
 
 const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
+// Verification codes are never returned to the client. In production they're
+// emailed; if email isn't configured yet, ALLOW_DEV_OTP=true logs the code to
+// Vercel's function logs instead (Dashboard → Deployments → Logs, or `vercel logs`).
 async function issueCode(sql, email) {
+  const isProd = process.env.VERCEL_ENV === 'production';
+  if (isProd && !process.env.RESEND_API_KEY && process.env.ALLOW_DEV_OTP !== 'true') {
+    const err = new Error('Email service is not configured — signup is unavailable');
+    err.statusCode = 503;
+    throw err;
+  }
+
   const code = String(randomInt(100000, 1000000));
   const expiresAt = new Date(Date.now() + CODE_TTL_MS).toISOString();
   await sql`
@@ -14,11 +25,20 @@ async function issueCode(sql, email) {
     ON CONFLICT (email) DO UPDATE SET code = ${code}, expires_at = ${expiresAt}
   `;
   const { sent } = await sendVerificationEmail(email, code);
-  // Dev fallback: expose the code when no email provider is configured.
-  return sent ? {} : { devCode: code };
+  if (!sent) log('verification_code_issued', { email, code });
+  else log('verification_email_sent', { email });
 }
 
 export default async function handler(req, res) {
+  try {
+    return await authHandler(req, res);
+  } catch (err) {
+    logError('auth_handler_error', err, { action: req.body?.action });
+    return res.status(err.statusCode || 500).json({ error: err.statusCode ? err.message : 'Something went wrong' });
+  }
+}
+
+async function authHandler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
   const sql = db();
   await ensureSchema(sql);
@@ -44,28 +64,64 @@ export default async function handler(req, res) {
     } else {
       await sql`INSERT INTO users (id, email, name, password_hash) VALUES (${randomUUID()}, ${email}, ${name}, ${passwordHash})`;
     }
-    const extra = await issueCode(sql, email);
-    return res.json({ message: 'Verification code sent to your email', ...extra });
+    await issueCode(sql, email);
+    log('signup', { email });
+    return res.json({ message: 'Verification code sent to your email' });
   }
 
   if (action === 'resend') {
     const [user] = await sql`SELECT verified FROM users WHERE email = ${email}`;
     if (!user) return res.status(404).json({ error: 'No account found — please signup' });
     if (user.verified) return res.status(400).json({ error: 'Account already verified — please login' });
-    const extra = await issueCode(sql, email);
-    return res.json({ message: 'Verification code resent', ...extra });
+    await issueCode(sql, email);
+    log('resend_code', { email });
+    return res.json({ message: 'Verification code resent' });
   }
 
   if (action === 'verify') {
     const code = String(req.body?.code || '').trim();
     const [row] = await sql`SELECT code, expires_at FROM verification_codes WHERE email = ${email}`;
-    if (!row || row.code !== code) return res.status(400).json({ error: 'Invalid verification code' });
+    if (!row || row.code !== code) {
+      log('verify_failed', { email, reason: 'invalid_code' });
+      return res.status(400).json({ error: 'Invalid verification code' });
+    }
     if (new Date(row.expires_at).getTime() < Date.now()) {
+      log('verify_failed', { email, reason: 'expired' });
       return res.status(400).json({ error: 'Code expired — request a new one' });
     }
     await sql`UPDATE users SET verified = TRUE WHERE email = ${email}`;
     await sql`DELETE FROM verification_codes WHERE email = ${email}`;
     const [user] = await sql`SELECT id, email, name FROM users WHERE email = ${email}`;
+    log('verify_success', { email });
+    return res.json({ token: createToken(user), admin: isAdminEmail(email) });
+  }
+
+  if (action === 'forgot') {
+    const [user] = await sql`SELECT id FROM users WHERE email = ${email}`;
+    log('forgot_password_requested', { email, accountExists: !!user });
+    // Same response either way, so the API can't be used to probe which emails exist.
+    if (!user) return res.json({ message: 'If an account exists, a reset code has been sent' });
+    await issueCode(sql, email);
+    return res.json({ message: 'If an account exists, a reset code has been sent' });
+  }
+
+  if (action === 'reset') {
+    const code = String(req.body?.code || '').trim();
+    const password = String(req.body?.password || '');
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+    const [row] = await sql`SELECT code, expires_at FROM verification_codes WHERE email = ${email}`;
+    if (!row || row.code !== code) {
+      log('reset_failed', { email, reason: 'invalid_code' });
+      return res.status(400).json({ error: 'Invalid reset code' });
+    }
+    if (new Date(row.expires_at).getTime() < Date.now()) {
+      log('reset_failed', { email, reason: 'expired' });
+      return res.status(400).json({ error: 'Code expired — request a new one' });
+    }
+    await sql`UPDATE users SET password_hash = ${hashPassword(password)}, verified = TRUE WHERE email = ${email}`;
+    await sql`DELETE FROM verification_codes WHERE email = ${email}`;
+    const [user] = await sql`SELECT id, email, name FROM users WHERE email = ${email}`;
+    log('password_reset', { email });
     return res.json({ token: createToken(user), admin: isAdminEmail(email) });
   }
 
@@ -86,17 +142,21 @@ export default async function handler(req, res) {
       } else {
         await sql`UPDATE users SET verified = TRUE WHERE id = ${admin.id}`;
       }
+      log('admin_login', { email });
       return res.json({ token: createToken(admin), admin: true });
     }
 
     const [user] = await sql`SELECT id, email, name, password_hash, verified FROM users WHERE email = ${email}`;
     if (!user || !checkPassword(password, user.password_hash)) {
+      log('login_failed', { email, reason: !user ? 'no_account' : 'bad_password' });
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     if (!user.verified) {
-      const extra = await issueCode(sql, email);
-      return res.status(403).json({ error: 'Email not verified', needsVerification: true, ...extra });
+      await issueCode(sql, email);
+      log('login_blocked_unverified', { email });
+      return res.status(403).json({ error: 'Email not verified', needsVerification: true });
     }
+    log('login_success', { email });
     return res.json({ token: createToken(user), admin: isAdminEmail(email) });
   }
 

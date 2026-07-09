@@ -1,8 +1,18 @@
 import { randomUUID } from 'crypto';
 import { db, ensureSchema } from './_db.js';
 import { requireAuth, requireAdmin } from './_auth.js';
+import { log, logError } from './_log.js';
 
 export default async function handler(req, res) {
+  try {
+    return await reviewsHandler(req, res);
+  } catch (err) {
+    logError('reviews_handler_error', err, { method: req.method });
+    return res.status(500).json({ error: 'Something went wrong' });
+  }
+}
+
+async function reviewsHandler(req, res) {
   const sql = db();
   await ensureSchema(sql);
 
@@ -57,11 +67,13 @@ export default async function handler(req, res) {
       INSERT INTO reviews (id, product_id, user_id, user_name, rating, text)
       VALUES (${randomUUID()}, ${productId}, ${user.uid}, ${user.name}, ${stars}, ${String(text || '').slice(0, 1000)})
     `;
+    log('review_submitted', { productId, userId: user.uid, rating: stars });
     return res.status(201).json({ message: 'Review submitted — it will appear once approved' });
   }
 
   if (req.method === 'PUT') {
-    if (!requireAdmin(req, res)) return;
+    const admin = requireAdmin(req, res);
+    if (!admin) return;
     const { id, status, featured } = req.body || {};
     if (!id) return res.status(400).json({ error: 'Review id required' });
     if (status !== undefined && !['pending', 'approved'].includes(status)) {
@@ -69,14 +81,17 @@ export default async function handler(req, res) {
     }
     if (status !== undefined) await sql`UPDATE reviews SET status = ${status} WHERE id = ${id}`;
     if (featured !== undefined) await sql`UPDATE reviews SET featured = ${!!featured} WHERE id = ${id}`;
+    log('review_moderated', { reviewId: id, status, featured, by: admin.email });
     return res.json({ ok: true });
   }
 
   if (req.method === 'DELETE') {
-    if (!requireAdmin(req, res)) return;
+    const admin = requireAdmin(req, res);
+    if (!admin) return;
     const { id } = req.query;
     if (!id) return res.status(400).json({ error: 'Review id required' });
     await sql`DELETE FROM reviews WHERE id = ${id}`;
+    log('review_deleted', { reviewId: id, by: admin.email });
     return res.json({ ok: true });
   }
 

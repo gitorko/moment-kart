@@ -1,16 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import QRCode from 'qrcode';
 import {
-  AUTH_KEY, IS_DEV, authAction, fetchProducts, saveProduct, deleteProduct,
+  AUTH_KEY, authAction, fetchProducts, saveProduct, deleteProduct,
   fetchProfile, saveProfile, placeOrder as apiPlaceOrder,
-  fetchMyOrders, fetchAdminOrders, setOrderStatus as apiSetOrderStatus,
+  fetchMyOrders, fetchAdminOrders, setOrderStatus as apiSetOrderStatus, resubmitPayment,
   fetchReviews, fetchFeaturedReviews, submitReview, fetchAdminReviews, updateReview, deleteReview,
 } from './api.js';
 
 // ─── AUTH HELPERS ─────────────────────────────────────────────────────────────
 
 const CART_KEY = 'moment-kart-cart';
-const UPI_ID = import.meta.env.VITE_UPI_ID || 'momentkart@upi';
+const UPI_ID = (typeof __UPI_ID__ !== 'undefined' && __UPI_ID__) || 'momentkart@upi';
 
 function b64urlDecode(str) {
   const b64 = str.replace(/-/g, '+').replace(/_/g, '/');
@@ -126,6 +126,7 @@ function ProductReviews({ productId, session }) {
   const [rating, setRating] = useState(0);
   const [text, setText] = useState('');
   const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     fetchReviews(productId).then(setReviews).catch(() => setReviews([]));
@@ -137,7 +138,9 @@ function ProductReviews({ productId, session }) {
       setNote('Please pick a star rating');
       return;
     }
+    setBusy(true);
     const { ok, data } = await submitReview({ productId, rating, text });
+    setBusy(false);
     if (ok) {
       setRating(0);
       setText('');
@@ -178,7 +181,7 @@ function ProductReviews({ productId, session }) {
             placeholder="Share your experience (optional)"
           />
           {note && <p style={{ fontSize: 12, color: 'var(--ocean)', margin: '4px 0' }}>{note}</p>}
-          <button className="btn btn-sm btn-ghost">Submit review</button>
+          <button className="btn btn-sm btn-ghost" disabled={busy}>{busy ? 'Submitting…' : 'Submit review'}</button>
         </form>
       ) : (
         <p style={{ fontSize: 12, color: 'var(--slate)', marginTop: 8 }}>
@@ -253,18 +256,12 @@ function AuthPage({ onLogin }) {
     return result;
   }
 
-  function showDevCode(data) {
-    // Local dev without an email provider: the API returns the code directly.
-    if (data.devCode) setInfo(`Dev mode — your code is ${data.devCode}`);
-    else setInfo('Verification code sent to your email 📧');
-  }
-
   async function handleSignup(e) {
     e.preventDefault();
     const r = await call({ action: 'signup', email, name, password });
     if (!r) return;
     if (r.ok) {
-      showDevCode(r.data);
+      setInfo('Verification code sent to your email');
       setMode('verify');
     } else setError(r.data.error || 'Signup failed');
   }
@@ -277,7 +274,7 @@ function AuthPage({ onLogin }) {
       localStorage.setItem(AUTH_KEY, r.data.token);
       onLogin();
     } else if (r.data.needsVerification) {
-      showDevCode(r.data);
+      setInfo('Verification code sent to your email');
       setMode('verify');
     } else setError(r.data.error || 'Login failed');
   }
@@ -294,8 +291,28 @@ function AuthPage({ onLogin }) {
 
   async function handleResend() {
     const r = await call({ action: 'resend', email });
-    if (r?.ok) showDevCode(r.data);
+    if (r?.ok) setInfo('Verification code resent');
     else if (r) setError(r.data.error || 'Could not resend code');
+  }
+
+  async function handleForgot(e) {
+    e.preventDefault();
+    const r = await call({ action: 'forgot', email });
+    if (!r) return;
+    if (r.ok) {
+      setInfo('If an account exists, a reset code has been sent');
+      setMode('reset');
+    } else setError(r.data.error || 'Could not send reset code');
+  }
+
+  async function handleReset(e) {
+    e.preventDefault();
+    const r = await call({ action: 'reset', email, code, password });
+    if (!r) return;
+    if (r.ok) {
+      localStorage.setItem(AUTH_KEY, r.data.token);
+      onLogin();
+    } else setError(r.data.error || 'Could not reset password');
   }
 
   return (
@@ -304,13 +321,7 @@ function AuthPage({ onLogin }) {
       <p style={{ textAlign: 'center', color: 'var(--slate)', marginBottom: 20, fontSize: 14 }}>
         Souvenirs that flow with your memories
       </p>
-      {IS_DEV && (
-        <p style={{ textAlign: 'center', fontSize: 12, color: 'var(--slate)', background: 'var(--foam)', borderRadius: 2, padding: '6px 10px', marginBottom: 14 }}>
-          Dev mode — data lives in browser localStorage. Admin login: {import.meta.env.VITE_ADMIN_EMAIL || 'admin@momentkart.dev'} / {import.meta.env.VITE_ADMIN_PASSWORD || 'admin123'}
-        </p>
-      )}
-
-      {mode !== 'verify' && (
+      {mode !== 'verify' && mode !== 'forgot' && mode !== 'reset' && (
         <div className="tabs">
           <button className={mode === 'login' ? 'active' : ''} onClick={() => { setMode('login'); setError(''); }}>
             Login
@@ -355,6 +366,65 @@ function AuthPage({ onLogin }) {
           {error && <p className="error">{error}</p>}
           <button className="btn" style={{ width: '100%' }} disabled={loading}>
             {loading ? 'Logging in…' : 'Login'}
+          </button>
+          <button
+            type="button"
+            className="link-btn"
+            style={{ margin: '14px auto 0', display: 'block' }}
+            onClick={() => { setError(''); setInfo(''); setMode('forgot'); }}
+          >
+            Forgot password?
+          </button>
+        </form>
+      )}
+
+      {mode === 'forgot' && (
+        <form onSubmit={handleForgot}>
+          <p style={{ marginBottom: 12, color: 'var(--slate)', fontSize: 14 }}>
+            Enter your email and we'll send you a reset code.
+          </p>
+          <div className="field">
+            <label>Email</label>
+            <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="you@example.com" autoFocus />
+          </div>
+          {error && <p className="error">{error}</p>}
+          <button className="btn" style={{ width: '100%' }} disabled={loading}>
+            {loading ? 'Sending code…' : 'Send reset code'}
+          </button>
+          <button type="button" className="link-btn" style={{ margin: '14px auto 0', display: 'block' }} onClick={() => { setError(''); setMode('login'); }}>
+            Back to login
+          </button>
+        </form>
+      )}
+
+      {mode === 'reset' && (
+        <form onSubmit={handleReset}>
+          <p style={{ marginBottom: 12, color: 'var(--slate)', fontSize: 14 }}>
+            Enter the 6-digit code sent to <strong>{email}</strong> and your new password.
+          </p>
+          {info && <p className="success">{info}</p>}
+          <div className="field">
+            <label>Reset code</label>
+            <input
+              className="otp-input"
+              value={code}
+              onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+              required
+              inputMode="numeric"
+              placeholder="••••••"
+              autoFocus
+            />
+          </div>
+          <div className="field">
+            <label>New password</label>
+            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} placeholder="At least 6 characters" />
+          </div>
+          {error && <p className="error">{error}</p>}
+          <button className="btn" style={{ width: '100%' }} disabled={loading || code.length !== 6}>
+            {loading ? 'Resetting…' : 'Reset password & login'}
+          </button>
+          <button type="button" className="link-btn" style={{ margin: '14px auto 0', display: 'block' }} onClick={handleForgot} disabled={loading}>
+            Resend code
           </button>
         </form>
       )}
@@ -762,10 +832,26 @@ function Checkout({ cart, setCart }) {
 
 function MyOrders() {
   const [orders, setOrders] = useState(null);
+  const [fixing, setFixing] = useState(null); // { orderId, upi_ref }
+  const [fixError, setFixError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    fetchMyOrders().then(setOrders).catch(() => setOrders([]));
-  }, []);
+  const load = () => fetchMyOrders().then(setOrders).catch(() => setOrders([]));
+  useEffect(() => { load(); }, []);
+
+  async function resubmit(e, order) {
+    e.preventDefault();
+    setBusy(true);
+    const { ok, data } = await resubmitPayment(order.id, fixing.upi_ref);
+    setBusy(false);
+    if (ok) {
+      setFixing(null);
+      setFixError('');
+      load();
+    } else {
+      setFixError(data.error || 'Could not update payment reference');
+    }
+  }
 
   if (!orders) return <div className="page"><p className="empty">Loading your orders…</p></div>;
 
@@ -779,23 +865,71 @@ function MyOrders() {
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <strong>{new Date(o.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
-              <span className={`badge badge-${o.status}`}>{o.status}</span>
+              <span className={`badge badge-${o.status}`}>{o.status.replace('_', ' ')}</span>
             </div>
-            {o.items.map((item, i) => (
-              <div key={i} style={{ fontSize: 14, padding: '4px 0', color: 'var(--slate)' }}>
-                {item.name} × {item.qty}
-                {item.message && <em> — “{item.message}”</em>}
+            <dl className="order-details">
+              {o.items.map((item, i) => (
+                <div key={i} className="order-row">
+                  <dt>Product:</dt>
+                  <dd>
+                    {item.name} × {item.qty}
+                    {item.message && (
+                      <div><span className="order-sublabel">Message:</span> <em>“{item.message}”</em></div>
+                    )}
+                  </dd>
+                </div>
+              ))}
+              {o.address && (
+                <div className="order-row">
+                  <dt>Address:</dt>
+                  <dd>{[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode].filter(Boolean).join(', ')}</dd>
+                </div>
+              )}
+              <div className="order-row">
+                <dt>Transaction:</dt>
+                <dd>{o.upi_ref}</dd>
               </div>
-            ))}
-            {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
-              <div style={{ fontSize: 13, color: 'var(--ocean)', marginTop: 6 }}>
-                Shipped via <strong>{o.courier}</strong> · Tracking ID: <strong>{o.tracking_id}</strong>
+              {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
+                <div className="order-row">
+                  <dt>Shipping:</dt>
+                  <dd>{o.courier} · Tracking ID: <strong>{o.tracking_id}</strong></dd>
+                </div>
+              )}
+              <div className="order-row">
+                <dt>Total:</dt>
+                <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
+              </div>
+            </dl>
+            {o.status === 'payment_issue' && (
+              <div className="payment-issue-box">
+                <p style={{ fontSize: 13, marginBottom: 8 }}>
+                  <strong>Payment not received.</strong> Please check the transaction in your UPI app
+                  and resubmit the correct transaction/UTR reference.
+                </p>
+                {fixing?.orderId === o.id ? (
+                  <form onSubmit={(e) => resubmit(e, o)} style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <div className="field" style={{ marginBottom: 0, flex: 1, minWidth: 200 }}>
+                      <label>UPI transaction reference (UTR)</label>
+                      <input
+                        value={fixing.upi_ref}
+                        onChange={(e) => setFixing({ ...fixing, upi_ref: e.target.value })}
+                        required
+                        minLength={6}
+                        placeholder="e.g. 415223344556"
+                        autoFocus
+                      />
+                    </div>
+                    <button className="btn btn-sm" disabled={busy}>{busy ? 'Submitting…' : 'Resubmit'}</button>
+                    <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => { setFixing(null); setFixError(''); }}>Cancel</button>
+                    {fixError && <p className="error" style={{ width: '100%', margin: 0 }}>{fixError}</p>}
+                  </form>
+                ) : (
+                  <button className="btn btn-sm" onClick={() => { setFixError(''); setFixing({ orderId: o.id, upi_ref: o.upi_ref }); }}>
+                    Update transaction ID
+                  </button>
+                )}
               </div>
             )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
-              <span style={{ fontSize: 13, color: 'var(--slate)' }}>UPI ref: {o.upi_ref}</span>
-              <strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong>
-            </div>
           </div>
         ))
       )}
@@ -811,6 +945,7 @@ function Profile({ session }) {
   const [editing, setEditing] = useState(null); // { idx, address } — idx -1 for new
   const [status, setStatus] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     fetchProfile()
@@ -826,7 +961,9 @@ function Profile({ session }) {
 
   async function persist(nextName, nextAddresses) {
     setStatus('');
+    setBusy(true);
     const { ok } = await saveProfile({ name: nextName, addresses: nextAddresses });
+    setBusy(false);
     setStatus(ok ? 'saved' : 'error');
     return ok;
   }
@@ -869,7 +1006,7 @@ function Profile({ session }) {
               <label>Name *</label>
               <input value={name} onChange={(e) => setName(e.target.value)} required />
             </div>
-            <button className="btn">Save</button>
+            <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
           </form>
 
           <div className="card">
@@ -896,8 +1033,8 @@ function Profile({ session }) {
                 <h2 style={{ marginTop: 0, fontSize: 20 }}>{editing.idx === -1 ? 'New address' : 'Edit address'}</h2>
                 <AddressForm address={editing.address} setAddress={(a) => setEditing({ ...editing, address: a })} />
                 <div style={{ display: 'flex', gap: 10 }}>
-                  <button className="btn btn-sm">Save address</button>
-                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditing(null)}>Cancel</button>
+                  <button className="btn btn-sm" disabled={busy}>{busy ? 'Saving…' : 'Save address'}</button>
+                  <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setEditing(null)}>Cancel</button>
                 </div>
               </form>
             ) : (
@@ -952,6 +1089,7 @@ function AdminProducts() {
   const [form, setForm] = useState(EMPTY_PRODUCT);
   const [editingId, setEditingId] = useState(null);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     fetchProducts().then(setProducts);
@@ -978,7 +1116,9 @@ function AdminProducts() {
       custom_label: form.custom_label,
       in_stock: form.in_stock,
     };
+    setBusy(true);
     const { ok, data } = await saveProduct(body, editingId);
+    setBusy(false);
     if (ok) {
       setForm(EMPTY_PRODUCT);
       setEditingId(null);
@@ -1003,13 +1143,17 @@ function AdminProducts() {
   }
 
   async function toggleStock(p) {
+    setBusy(true);
     await saveProduct({ ...p, in_stock: !p.in_stock }, p.id);
+    setBusy(false);
     load();
   }
 
   async function remove(p) {
     if (!window.confirm(`Delete "${p.name}"?`)) return;
+    setBusy(true);
     await deleteProduct(p.id);
+    setBusy(false);
     load();
   }
 
@@ -1063,9 +1207,11 @@ function AdminProducts() {
         </div>
         {error && <p className="error">{error}</p>}
         <div style={{ display: 'flex', gap: 10 }}>
-          <button className="btn">{editingId ? 'Update product' : 'Add product'}</button>
+          <button className="btn" disabled={busy}>
+            {busy ? 'Saving…' : editingId ? 'Update product' : 'Add product'}
+          </button>
           {editingId && (
-            <button type="button" className="btn btn-ghost" onClick={() => { setEditingId(null); setForm(EMPTY_PRODUCT); }}>
+            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { setEditingId(null); setForm(EMPTY_PRODUCT); }}>
               Cancel
             </button>
           )}
@@ -1092,11 +1238,11 @@ function AdminProducts() {
                   {p.in_stock ? <span className="badge badge-fulfilled">in stock</span> : <span className="badge badge-oos">out of stock</span>}
                 </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
-                  <button className="btn btn-sm btn-ghost" onClick={() => startEdit(p)}>Edit</button>{' '}
-                  <button className="btn btn-sm btn-ghost" onClick={() => toggleStock(p)}>
+                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => startEdit(p)}>Edit</button>{' '}
+                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => toggleStock(p)}>
                     {p.in_stock ? 'Mark out of stock' : 'Mark in stock'}
                   </button>{' '}
-                  <button className="btn btn-sm btn-danger" onClick={() => remove(p)}>Delete</button>
+                  <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => remove(p)}>Delete</button>
                 </td>
               </tr>
             ))}
@@ -1123,9 +1269,12 @@ function AdminOrders() {
 
   const [shipping, setShipping] = useState(null); // { orderId, courier, tracking_id }
   const [shipError, setShipError] = useState('');
+  const [busy, setBusy] = useState(false);
 
   async function setStatus(order, status, extra) {
+    setBusy(true);
     const { ok, data } = await apiSetOrderStatus(order.id, status, extra);
+    setBusy(false);
     if (!ok) {
       setShipError(data.error || 'Update failed');
       return;
@@ -1138,10 +1287,10 @@ function AdminOrders() {
   return (
     <div className="page">
       <h1>Admin · Orders</h1>
-      <div className="tabs" style={{ maxWidth: 560 }}>
-        {['pending', 'shipped', 'fulfilled', 'all'].map((f) => (
+      <div className="tabs" style={{ maxWidth: 680 }}>
+        {[['pending', 'Pending'], ['payment_issue', 'Payment Issue'], ['shipped', 'Shipped'], ['fulfilled', 'Fulfilled'], ['all', 'All']].map(([f, label]) => (
           <button key={f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
-            {f[0].toUpperCase() + f.slice(1)}
+            {label}
           </button>
         ))}
       </div>
@@ -1158,34 +1307,56 @@ function AdminOrders() {
                   {new Date(o.created_at).toLocaleString('en-IN')}
                 </div>
               </div>
-              <span className={`badge badge-${o.status}`}>{o.status}</span>
+              <span className={`badge badge-${o.status}`}>{o.status.replace('_', ' ')}</span>
             </div>
-            <div style={{ margin: '10px 0' }}>
+            <dl className="order-details">
               {o.items.map((item, i) => (
-                <div key={i} style={{ fontSize: 14, padding: '2px 0' }}>
-                  • {item.name} × {item.qty}
-                  {item.message && <em style={{ color: 'var(--ocean)' }}> — “{item.message}”</em>}
+                <div key={i} className="order-row">
+                  <dt>Product:</dt>
+                  <dd>
+                    {item.name} × {item.qty}
+                    {item.message && (
+                      <div><span className="order-sublabel">Message:</span> <em style={{ color: 'var(--ocean)' }}>“{item.message}”</em></div>
+                    )}
+                  </dd>
                 </div>
               ))}
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--slate)' }}>
-              📍 {[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode].filter(Boolean).join(', ')}
-              {o.address.phone && ` · 📞 ${o.address.phone}`}
-            </div>
-            {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
-              <div style={{ fontSize: 13, color: 'var(--slate)', marginTop: 6 }}>
-                🚚 {o.courier} · Tracking: <strong>{o.tracking_id}</strong>
+              <div className="order-row">
+                <dt>Address:</dt>
+                <dd>
+                  {[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode].filter(Boolean).join(', ')}
+                  {o.address.phone && ` · Phone: ${o.address.phone}`}
+                </dd>
               </div>
-            )}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
-              <span style={{ fontSize: 13 }}>
-                UPI ref: <strong>{o.upi_ref}</strong> · Total: <strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong>
-              </span>
+              <div className="order-row">
+                <dt>Transaction:</dt>
+                <dd><strong>{o.upi_ref}</strong></dd>
+              </div>
+              {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
+                <div className="order-row">
+                  <dt>Shipping:</dt>
+                  <dd>{o.courier} · Tracking ID: <strong>{o.tracking_id}</strong></dd>
+                </div>
+              )}
+              <div className="order-row">
+                <dt>Total:</dt>
+                <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
+              </div>
+            </dl>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {o.status === 'pending' && (
-                  <button className="btn btn-sm" onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '' }); }}>
-                    Mark shipped
-                  </button>
+                  <>
+                    <button className="btn btn-sm" onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '' }); }}>
+                      Mark shipped
+                    </button>
+                    <button className="btn btn-sm btn-danger" onClick={() => setStatus(o, 'payment_issue')}>
+                      Payment not received
+                    </button>
+                  </>
+                )}
+                {o.status === 'payment_issue' && (
+                  <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'pending')}>Back to pending</button>
                 )}
                 {o.status === 'shipped' && (
                   <>
@@ -1216,8 +1387,8 @@ function AdminOrders() {
                   <label>Tracking ID</label>
                   <input value={shipping.tracking_id} onChange={(e) => setShipping({ ...shipping, tracking_id: e.target.value })} required placeholder="e.g. 69847712345" />
                 </div>
-                <button className="btn btn-sm">Ship</button>
-                <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setShipping(null); setShipError(''); }}>Cancel</button>
+                <button className="btn btn-sm" disabled={busy}>{busy ? 'Shipping…' : 'Ship'}</button>
+                <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => { setShipping(null); setShipError(''); }}>Cancel</button>
                 {shipError && <p className="error" style={{ width: '100%', margin: '4px 0 0' }}>{shipError}</p>}
               </form>
             )}
@@ -1239,14 +1410,20 @@ function AdminReviews() {
   }, [filter]);
   useEffect(load, [load]);
 
+  const [busy, setBusy] = useState(false);
+
   async function patch(review, changes) {
+    setBusy(true);
     await updateReview(review.id, changes);
+    setBusy(false);
     load();
   }
 
   async function remove(review) {
     if (!window.confirm(`Delete this review by ${review.user_name}?`)) return;
+    setBusy(true);
     await deleteReview(review.id);
+    setBusy(false);
     load();
   }
 
@@ -1282,16 +1459,16 @@ function AdminReviews() {
             {r.text && <p style={{ margin: '10px 0', fontSize: 14, lineHeight: 1.55 }}>{r.text}</p>}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 6 }}>
               {r.status === 'pending' ? (
-                <button className="btn btn-sm" onClick={() => patch(r, { status: 'approved' })}>Approve</button>
+                <button className="btn btn-sm" disabled={busy} onClick={() => patch(r, { status: 'approved' })}>Approve</button>
               ) : (
                 <>
-                  <button className="btn btn-sm btn-ghost" onClick={() => patch(r, { status: 'pending' })}>Unapprove</button>
-                  <button className="btn btn-sm btn-ghost" onClick={() => patch(r, { featured: !r.featured })}>
+                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => patch(r, { status: 'pending' })}>Unapprove</button>
+                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => patch(r, { featured: !r.featured })}>
                     {r.featured ? 'Remove from home page' : 'Feature on home page ★'}
                   </button>
                 </>
               )}
-              <button className="btn btn-sm btn-danger" onClick={() => remove(r)}>Delete</button>
+              <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => remove(r)}>Delete</button>
             </div>
           </div>
         ))
