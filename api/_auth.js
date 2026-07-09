@@ -9,7 +9,18 @@ export function isAdminEmail(email) {
     .split(',')
     .map((e) => e.trim().toLowerCase())
     .filter(Boolean);
+  const builtIn = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  if (builtIn) admins.push(builtIn);
   return admins.includes(String(email).toLowerCase());
+}
+
+// The built-in admin is defined by ADMIN_EMAIL + ADMIN_PASSWORD env vars and
+// needs no signup or email verification.
+export function isBuiltInAdmin(email, password) {
+  const adminEmail = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  const adminPass = process.env.ADMIN_PASSWORD;
+  if (!adminEmail || !adminPass) return false;
+  return String(email).toLowerCase() === adminEmail && password === adminPass;
 }
 
 export function hashPassword(password) {

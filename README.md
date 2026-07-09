@@ -27,7 +27,9 @@ Vite + React SPA with Vercel serverless functions and Neon Postgres.
 | --- | --- |
 | `DATABASE_URL` | Neon Postgres connection string |
 | `AUTH_SECRET` | HMAC secret for auth tokens |
-| `ADMIN_EMAILS` | Comma-separated admin emails |
+| `ADMIN_EMAIL` | Built-in admin login email — exists by default, no signup needed |
+| `ADMIN_PASSWORD` | Built-in admin login password |
+| `ADMIN_EMAILS` | Optional: additional admin emails (comma-separated, these sign up normally) |
 | `RESEND_API_KEY` | Resend API key for verification emails |
 | `EMAIL_FROM` | Sender, e.g. `Moment Kart <hello@yourdomain.com>` |
 | `VITE_UPI_ID` | Your UPI id shown at checkout (build-time) |

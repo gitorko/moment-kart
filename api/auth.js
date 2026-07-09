@@ -1,6 +1,6 @@
 import { randomUUID, randomInt } from 'crypto';
 import { db, ensureSchema } from './_db.js';
-import { hashPassword, checkPassword, createToken, isAdminEmail } from './_auth.js';
+import { hashPassword, checkPassword, createToken, isAdminEmail, isBuiltInAdmin } from './_auth.js';
 import { sendVerificationEmail } from './_email.js';
 
 const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
@@ -71,6 +71,24 @@ export default async function handler(req, res) {
 
   if (action === 'login') {
     const password = String(req.body?.password || '');
+
+    // Built-in admin (ADMIN_EMAIL/ADMIN_PASSWORD env vars): exists by default,
+    // auto-provisioned in the users table on first login so orders/profile work.
+    if (isBuiltInAdmin(email, password)) {
+      let [admin] = await sql`SELECT id, email, name FROM users WHERE email = ${email}`;
+      if (!admin) {
+        const id = randomUUID();
+        await sql`
+          INSERT INTO users (id, email, name, password_hash, verified)
+          VALUES (${id}, ${email}, ${'Admin'}, ${hashPassword(password)}, TRUE)
+        `;
+        admin = { id, email, name: 'Admin' };
+      } else {
+        await sql`UPDATE users SET verified = TRUE WHERE id = ${admin.id}`;
+      }
+      return res.json({ token: createToken(admin), admin: true });
+    }
+
     const [user] = await sql`SELECT id, email, name, password_hash, verified FROM users WHERE email = ${email}`;
     if (!user || !checkPassword(password, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid email or password' });
