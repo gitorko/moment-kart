@@ -1,0 +1,84 @@
+import { randomUUID } from 'crypto';
+import { db, ensureSchema } from './_db.js';
+import { requireAuth, requireAdmin } from './_auth.js';
+
+export default async function handler(req, res) {
+  const sql = db();
+  await ensureSchema(sql);
+
+  if (req.method === 'GET') {
+    // Public: approved reviews for a product, or featured reviews for the home page.
+    if (req.query.productId) {
+      const rows = await sql`
+        SELECT id, user_name, rating, text, created_at FROM reviews
+        WHERE product_id = ${req.query.productId} AND status = 'approved'
+        ORDER BY created_at DESC
+      `;
+      return res.json(rows);
+    }
+    if (req.query.scope === 'featured') {
+      const rows = await sql`
+        SELECT r.id, r.user_name, r.rating, r.text, p.name AS product_name FROM reviews r
+        JOIN products p ON p.id = r.product_id
+        WHERE r.status = 'approved' AND r.featured = TRUE
+        ORDER BY r.created_at DESC LIMIT 6
+      `;
+      return res.json(rows);
+    }
+    if (req.query.scope === 'admin') {
+      const user = requireAuth(req, res);
+      if (!user) return;
+      if (!user.admin) return res.status(403).json({ error: 'Admin only' });
+      const status = req.query.status;
+      const rows = status
+        ? await sql`
+            SELECT r.*, p.name AS product_name FROM reviews r
+            JOIN products p ON p.id = r.product_id
+            WHERE r.status = ${status} ORDER BY r.created_at DESC`
+        : await sql`
+            SELECT r.*, p.name AS product_name FROM reviews r
+            JOIN products p ON p.id = r.product_id ORDER BY r.created_at DESC`;
+      return res.json(rows);
+    }
+    return res.status(400).json({ error: 'productId or scope required' });
+  }
+
+  if (req.method === 'POST') {
+    const user = requireAuth(req, res);
+    if (!user) return;
+    const { productId, rating, text } = req.body || {};
+    const stars = parseInt(rating, 10);
+    if (!productId || !Number.isInteger(stars) || stars < 1 || stars > 5) {
+      return res.status(400).json({ error: 'Product and a 1–5 star rating are required' });
+    }
+    const [product] = await sql`SELECT id FROM products WHERE id = ${productId}`;
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    await sql`
+      INSERT INTO reviews (id, product_id, user_id, user_name, rating, text)
+      VALUES (${randomUUID()}, ${productId}, ${user.uid}, ${user.name}, ${stars}, ${String(text || '').slice(0, 1000)})
+    `;
+    return res.status(201).json({ message: 'Review submitted — it will appear once approved' });
+  }
+
+  if (req.method === 'PUT') {
+    if (!requireAdmin(req, res)) return;
+    const { id, status, featured } = req.body || {};
+    if (!id) return res.status(400).json({ error: 'Review id required' });
+    if (status !== undefined && !['pending', 'approved'].includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    if (status !== undefined) await sql`UPDATE reviews SET status = ${status} WHERE id = ${id}`;
+    if (featured !== undefined) await sql`UPDATE reviews SET featured = ${!!featured} WHERE id = ${id}`;
+    return res.json({ ok: true });
+  }
+
+  if (req.method === 'DELETE') {
+    if (!requireAdmin(req, res)) return;
+    const { id } = req.query;
+    if (!id) return res.status(400).json({ error: 'Review id required' });
+    await sql`DELETE FROM reviews WHERE id = ${id}`;
+    return res.json({ ok: true });
+  }
+
+  res.status(405).end();
+}
