@@ -51,6 +51,8 @@ export async function ensureSchema(sql) {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS courier TEXT`;
+  await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_id TEXT`;
   await sql`
     CREATE TABLE IF NOT EXISTS reviews (
       id TEXT PRIMARY KEY,

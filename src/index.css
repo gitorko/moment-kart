@@ -82,8 +82,15 @@ a { color: inherit; text-decoration: none; }
   font-size: 10px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
 }
 .badge-pending { background: #f3ead9; color: #8a6d3b; }
+.badge-shipped { background: #dde8ec; color: var(--ocean); }
 .badge-fulfilled { background: #e2ece7; color: var(--ok); }
 .badge-oos { background: #f3e2e0; color: var(--danger); }
+
+.ship-form {
+  display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap;
+  margin-top: 14px; padding: 14px; background: var(--ivory);
+  border: 1px solid var(--seaglass); border-radius: 2px;
+}
 
 /* ─── Nav ── */
 .nav {
@@ -238,6 +245,10 @@ th {
   border: 1px solid var(--seaglass);
 }
 .upi-id { font-family: var(--serif); font-size: 22px; font-weight: 600; color: var(--deep); word-break: break-all; }
+.upi-qr {
+  display: block; margin: 14px 0 10px;
+  border: 1px solid var(--seaglass); border-radius: 3px;
+}
 
 .qty-controls { display: flex; align-items: center; gap: 12px; }
 .qty-controls button {

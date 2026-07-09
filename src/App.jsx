@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import QRCode from 'qrcode';
 import {
   AUTH_KEY, IS_DEV, authAction, fetchProducts, saveProduct, deleteProduct,
   fetchProfile, saveProfile, placeOrder as apiPlaceOrder,
@@ -571,6 +572,20 @@ function Cart({ cart, setCart, session }) {
 
 // ─── CHECKOUT ─────────────────────────────────────────────────────────────────
 
+function UpiQr({ value }) {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    if (canvasRef.current) {
+      QRCode.toCanvas(canvasRef.current, value, {
+        width: 200,
+        margin: 2,
+        color: { dark: '#123845', light: '#f7f5f0' },
+      });
+    }
+  }, [value]);
+  return <canvas ref={canvasRef} className="upi-qr" />;
+}
+
 const EMPTY_ADDRESS = { label: '', line1: '', line2: '', city: '', state: '', pincode: '', phone: '' };
 
 const addressSummary = (a) =>
@@ -709,6 +724,10 @@ function Checkout({ cart, setCart }) {
               Pay <strong>{rupees(total)}</strong> to:
             </p>
             <p className="upi-id">{UPI_ID}</p>
+            <UpiQr value={upiLink} />
+            <p style={{ fontSize: 12, color: 'var(--slate)' }}>
+              Scan with any UPI app — GPay, PhonePe, Paytm — or tap below on your phone.
+            </p>
             <a href={upiLink}>
               <button type="button" className="btn btn-sm" style={{ marginTop: 12 }}>
                 Open UPI App
@@ -768,6 +787,11 @@ function MyOrders() {
                 {item.message && <em> — “{item.message}”</em>}
               </div>
             ))}
+            {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
+              <div style={{ fontSize: 13, color: 'var(--ocean)', marginTop: 6 }}>
+                Shipped via <strong>{o.courier}</strong> · Tracking ID: <strong>{o.tracking_id}</strong>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8 }}>
               <span style={{ fontSize: 13, color: 'var(--slate)' }}>UPI ref: {o.upi_ref}</span>
               <strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong>
@@ -1097,16 +1121,25 @@ function AdminOrders() {
   }, [filter]);
   useEffect(load, [load]);
 
-  async function setStatus(order, status) {
-    await apiSetOrderStatus(order.id, status);
+  const [shipping, setShipping] = useState(null); // { orderId, courier, tracking_id }
+  const [shipError, setShipError] = useState('');
+
+  async function setStatus(order, status, extra) {
+    const { ok, data } = await apiSetOrderStatus(order.id, status, extra);
+    if (!ok) {
+      setShipError(data.error || 'Update failed');
+      return;
+    }
+    setShipping(null);
+    setShipError('');
     load();
   }
 
   return (
     <div className="page">
       <h1>Admin · Orders</h1>
-      <div className="tabs" style={{ maxWidth: 420 }}>
-        {['pending', 'fulfilled', 'all'].map((f) => (
+      <div className="tabs" style={{ maxWidth: 560 }}>
+        {['pending', 'shipped', 'fulfilled', 'all'].map((f) => (
           <button key={f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
             {f[0].toUpperCase() + f.slice(1)}
           </button>
@@ -1139,16 +1172,55 @@ function AdminOrders() {
               📍 {[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode].filter(Boolean).join(', ')}
               {o.address.phone && ` · 📞 ${o.address.phone}`}
             </div>
+            {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
+              <div style={{ fontSize: 13, color: 'var(--slate)', marginTop: 6 }}>
+                🚚 {o.courier} · Tracking: <strong>{o.tracking_id}</strong>
+              </div>
+            )}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ fontSize: 13 }}>
                 UPI ref: <strong>{o.upi_ref}</strong> · Total: <strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong>
               </span>
-              {o.status === 'pending' ? (
-                <button className="btn btn-sm" onClick={() => setStatus(o, 'fulfilled')}>Mark fulfilled ✓</button>
-              ) : (
-                <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'pending')}>Move back to pending</button>
-              )}
+              <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                {o.status === 'pending' && (
+                  <button className="btn btn-sm" onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '' }); }}>
+                    Mark shipped
+                  </button>
+                )}
+                {o.status === 'shipped' && (
+                  <>
+                    <button className="btn btn-sm" onClick={() => setStatus(o, 'fulfilled')}>Mark fulfilled ✓</button>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'pending')}>Back to pending</button>
+                  </>
+                )}
+                {o.status === 'fulfilled' && (
+                  <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'shipped', { courier: o.courier || 'Bluedart', tracking_id: o.tracking_id || '-' })}>
+                    Back to shipped
+                  </button>
+                )}
+              </span>
             </div>
+            {shipping?.orderId === o.id && (
+              <form
+                className="ship-form"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  setStatus(o, 'shipped', { courier: shipping.courier, tracking_id: shipping.tracking_id });
+                }}
+              >
+                <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+                  <label>Courier</label>
+                  <input value={shipping.courier} onChange={(e) => setShipping({ ...shipping, courier: e.target.value })} required placeholder="Bluedart" />
+                </div>
+                <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+                  <label>Tracking ID</label>
+                  <input value={shipping.tracking_id} onChange={(e) => setShipping({ ...shipping, tracking_id: e.target.value })} required placeholder="e.g. 69847712345" />
+                </div>
+                <button className="btn btn-sm">Ship</button>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => { setShipping(null); setShipError(''); }}>Cancel</button>
+                {shipError && <p className="error" style={{ width: '100%', margin: '4px 0 0' }}>{shipError}</p>}
+              </form>
+            )}
           </div>
         ))
       )}

@@ -71,11 +71,22 @@ export default async function handler(req, res) {
 
   if (req.method === 'PUT') {
     if (!requireAdmin(req, res)) return;
-    const { id, status } = req.body || {};
-    if (!id || !['pending', 'fulfilled'].includes(status)) {
+    const { id, status, courier, tracking_id } = req.body || {};
+    if (!id || !['pending', 'shipped', 'fulfilled'].includes(status)) {
       return res.status(400).json({ error: 'Order id and a valid status are required' });
     }
-    await sql`UPDATE orders SET status = ${status} WHERE id = ${id}`;
+    if (status === 'shipped' && (!courier || !String(tracking_id || '').trim())) {
+      return res.status(400).json({ error: 'Courier name and tracking ID are required to mark shipped' });
+    }
+    if (status === 'shipped') {
+      await sql`
+        UPDATE orders SET status = 'shipped',
+          courier = ${String(courier).trim()}, tracking_id = ${String(tracking_id).trim()}
+        WHERE id = ${id}
+      `;
+    } else {
+      await sql`UPDATE orders SET status = ${status} WHERE id = ${id}`;
+    }
     return res.json({ ok: true });
   }
 

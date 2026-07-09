@@ -311,11 +311,20 @@ export async function deleteReview(id) {
   return { ok: true, data: {} };
 }
 
-export async function setOrderStatus(id, status) {
-  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, status }) }));
+export async function setOrderStatus(id, status, extra = {}) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, status, ...extra }) }));
+  if (status === 'shipped' && (!extra.courier || !String(extra.tracking_id || '').trim())) {
+    return { ok: false, data: { error: 'Courier name and tracking ID are required to mark shipped' } };
+  }
   const orders = read(ORDERS_KEY, []);
   const order = orders.find((o) => o.id === id);
-  if (order) order.status = status;
+  if (order) {
+    order.status = status;
+    if (status === 'shipped') {
+      order.courier = extra.courier;
+      order.tracking_id = extra.tracking_id;
+    }
+  }
   write(ORDERS_KEY, orders);
   return { ok: true, data: {} };
 }
