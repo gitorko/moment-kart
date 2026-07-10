@@ -14,7 +14,8 @@ Same names in `.env.local` (dev) and the Vercel dashboard (production):
 | `ADMIN_UPI_ID` | UPI id shown at checkout (embedded at build time) |
 | `DATABASE_URL` | Set automatically by Vercel when the Neon database is attached |
 | `AUTH_SECRET` | Set automatically by Vercel |
-| `RESEND_API_KEY` | [Resend](https://resend.com) API key for verification and shipping emails |
+| `GMAIL_USER` | Gmail address that sends verification and shipping emails |
+| `GMAIL_APP_PASSWORD` | 16-character [Google App Password](https://myaccount.google.com/apppasswords) for `GMAIL_USER` |
 
 ## Run locally
 
@@ -23,19 +24,17 @@ npm install
 npm run dev
 ```
 
-Open `http://localhost:5173`. Dev mode stores everything in localStorage — no database needed. With `RESEND_API_KEY` in `.env.local`, verification and shipping emails are sent for real.
+Open `http://localhost:5173`. Dev mode stores everything in localStorage — no database needed. With `GMAIL_USER` and `GMAIL_APP_PASSWORD` in `.env.local`, verification and shipping emails are sent for real.
 
-## Email (Resend)
+## Email (Gmail SMTP)
 
-Until a domain is verified, Resend's sandbox only delivers to your own Resend account email — sends to any other address fail with a 403 `validation_error`.
+Emails are sent from a regular Gmail account via SMTP, so no domain purchase or DNS setup is needed.
 
-To email real customers, verify a domain:
+1. Enable 2-Step Verification on the Google account that will send email
+2. Generate an App Password at [myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)
+3. Set `GMAIL_USER` to that Gmail address and `GMAIL_APP_PASSWORD` to the generated app password
 
-1. Add your domain at [resend.com/domains](https://resend.com/domains)
-2. Add the DNS records Resend shows (DKIM + SPF) at your domain registrar and wait for the status to turn **Verified** (minutes to a few hours)
-3. Set `ADMIN_EMAIL` to an address on that domain (e.g. `orders@yourdomain.com`) — it is the sender of all emails
-
-A gmail.com address can never be a sender; while `ADMIN_EMAIL` is on an unverified domain, the app automatically falls back to Resend's shared sender (`onboarding@resend.dev`, sandbox rules apply) with `ADMIN_EMAIL` as reply-to.
+Regular Gmail accounts are capped at roughly 500 sends/day, and outgoing mail shows `GMAIL_USER` as the sender — fine for low-volume/personal use, but consider a transactional email provider (e.g. Resend, SendGrid) with a verified domain if volume grows.
 
 Verification codes (OTPs) are always recoverable from logs, never shown in the UI:
 
