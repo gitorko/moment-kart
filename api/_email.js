@@ -1,40 +1,37 @@
-// Emails are sent via Resend (https://resend.com).
-// Set RESEND_API_KEY in Vercel. Without a key (local dev), nothing is sent.
-// The sender is always the admin account (ADMIN_EMAIL).
+// Emails are sent via Gmail SMTP using nodemailer.
+// Set GMAIL_USER and GMAIL_APP_PASSWORD in Vercel. Without them (local dev), nothing is sent.
+// GMAIL_APP_PASSWORD is a 16-character App Password from
+// https://myaccount.google.com/apppasswords (requires 2-Step Verification enabled).
+
+import nodemailer from 'nodemailer';
 
 const APP_NAME = process.env.APP_NAME || 'Moment Kart';
 
-async function sendEmail({ to, subject, html }) {
-  const apiKey = process.env.RESEND_API_KEY;
-  if (!apiKey) return { sent: false };
-
-  const sender = process.env.ADMIN_EMAIL || 'onboarding@resend.dev';
-  const post = (body) =>
-    fetch('https://api.resend.com/emails', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
+let transporter;
+function getTransporter() {
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      service: 'gmail',
+      auth: {
+        user: process.env.GMAIL_USER,
+        pass: process.env.GMAIL_APP_PASSWORD,
       },
-      body: JSON.stringify(body),
     });
+  }
+  return transporter;
+}
 
-  let res = await post({ from: `${APP_NAME} <${sender}>`, to: [to], subject, html });
-  if (!res.ok && sender !== 'onboarding@resend.dev') {
-    // Resend only accepts senders on domains verified in its dashboard (so never
-    // gmail.com etc.). Fall back to its shared sender, keeping the admin as reply-to.
-    res = await post({
-      from: `${APP_NAME} <onboarding@resend.dev>`,
-      reply_to: sender,
-      to: [to],
-      subject,
-      html,
-    });
-  }
-  if (!res.ok) {
-    const detail = await res.text().catch(() => '');
-    throw new Error(`Email send failed: ${res.status} ${detail}`);
-  }
+async function sendEmail({ to, subject, html }) {
+  const user = process.env.GMAIL_USER;
+  const pass = process.env.GMAIL_APP_PASSWORD;
+  if (!user || !pass) return { sent: false };
+
+  await getTransporter().sendMail({
+    from: `${APP_NAME} <${user}>`,
+    to,
+    subject,
+    html,
+  });
   return { sent: true };
 }
 

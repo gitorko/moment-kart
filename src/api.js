@@ -89,7 +89,7 @@ function devCurrentUser() {
 
 // Dev emails go through the Vite dev server (/api/dev-email, see vite.config.js):
 // it prints OTP codes to the `npm run dev` terminal + dev-emails.log, and sends
-// the real email via Resend when RESEND_API_KEY is set in .env.local.
+// the real email via Gmail SMTP when GMAIL_USER/GMAIL_APP_PASSWORD are set in .env.local.
 function devSendEmail(payload) {
   return fetch('/api/dev-email', {
     method: 'POST',

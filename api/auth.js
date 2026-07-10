@@ -9,7 +9,7 @@ const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 // Verification codes are never returned to the client — they're emailed.
 async function issueCode(sql, email) {
   const isProd = process.env.VERCEL_ENV === 'production';
-  if (isProd && !process.env.RESEND_API_KEY) {
+  if (isProd && !(process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD)) {
     const err = new Error('Email service is not configured — signup is unavailable');
     err.statusCode = 503;
     throw err;

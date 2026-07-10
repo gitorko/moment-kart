@@ -21,8 +21,8 @@ function rotateLogIfNeeded() {
 }
 
 // Dev-only /api/dev-email endpoint on the Vite dev server: sends real emails via
-// Resend (RESEND_API_KEY from .env.local) and prints OTP codes to this terminal
-// and app.log — codes never appear in the browser.
+// Gmail SMTP (GMAIL_USER/GMAIL_APP_PASSWORD from .env.local) and prints OTP codes
+// to this terminal and app.log — codes never appear in the browser.
 function devEmailApi() {
   return {
     name: 'dev-email-api',
@@ -51,7 +51,7 @@ function devEmailApi() {
             const result = kind === 'shipped'
               ? await email.sendShippedEmail(to, order || {})
               : await email.sendVerificationEmail(to, code);
-            record(`${kind} email to ${to}: ${result.sent ? 'sent via Resend' : 'NOT sent (no RESEND_API_KEY in .env.local)'}`);
+            record(`${kind} email to ${to}: ${result.sent ? 'sent via Gmail' : 'NOT sent (no GMAIL_USER/GMAIL_APP_PASSWORD in .env.local)'}`);
             res.end(JSON.stringify(result));
           } catch (err) {
             record(`email send failed: ${err.message}`, true);
@@ -69,7 +69,7 @@ export default defineConfig(({ command, mode }) => {
   const env = { ...loadEnv(mode, process.cwd(), ''), ...process.env };
   const isDev = command === 'serve';
   // api/_email.js reads these from process.env — make .env.local values visible to it in dev.
-  for (const key of ['APP_NAME', 'ADMIN_EMAIL', 'RESEND_API_KEY']) {
+  for (const key of ['APP_NAME', 'ADMIN_EMAIL', 'GMAIL_USER', 'GMAIL_APP_PASSWORD']) {
     if (env[key]) process.env[key] = env[key];
   }
   return {
