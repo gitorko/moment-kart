@@ -6,7 +6,7 @@ import {
   fetchMyOrders, fetchAdminOrders, setOrderStatus as apiSetOrderStatus, resubmitPayment,
   deleteOrders, importOrders,
   fetchReviews, fetchFeaturedReviews, submitReview, fetchAdminReviews, updateReview, deleteReview,
-  fetchAdminUsers, impersonateUser,
+  fetchAdminUsers, impersonateUser, sendMarketingEmail,
 } from './api.js';
 
 // ─── AUTH HELPERS ─────────────────────────────────────────────────────────────
@@ -55,6 +55,33 @@ function loadCart() {
 }
 
 const rupees = (paise) => `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+
+// ─── PAGINATION ───────────────────────────────────────────────────────────────
+
+const DEFAULT_PAGE_SIZE = 10;
+
+function usePager(items, pageSize = DEFAULT_PAGE_SIZE) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const slice = items.slice(safePage * pageSize, (safePage + 1) * pageSize);
+  return { page: safePage, setPage, pageCount, slice };
+}
+
+function Pager({ page, pageCount, setPage, label }) {
+  if (pageCount <= 1) return null;
+  return (
+    <div className="shop-pager">
+      <button type="button" className="btn btn-sm btn-ghost" disabled={page <= 0} onClick={() => setPage(page - 1)}>
+        ← Previous
+      </button>
+      <span>Page {page + 1} of {pageCount}{label ? ` · ${label}` : ''}</span>
+      <button type="button" className="btn btn-sm btn-ghost" disabled={page >= pageCount - 1} onClick={() => setPage(page + 1)}>
+        Next →
+      </button>
+    </div>
+  );
+}
 
 // ─── ROUTING ──────────────────────────────────────────────────────────────────
 
@@ -160,6 +187,8 @@ function ProductReviews({ productId, session }) {
     }
   }
 
+  const { page, setPage, pageCount, slice } = usePager(reviews || [], 5);
+
   return (
     <div className="reviews-panel">
       {reviews === null ? (
@@ -167,7 +196,8 @@ function ProductReviews({ productId, session }) {
       ) : reviews.length === 0 ? (
         <p style={{ fontSize: 13, color: 'var(--slate)', fontStyle: 'italic' }}>No reviews yet.</p>
       ) : (
-        reviews.map((r) => (
+        <>
+        {slice.map((r) => (
           <div key={r.id} className="review">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <Stars value={r.rating} />
@@ -175,7 +205,9 @@ function ProductReviews({ productId, session }) {
             </div>
             {r.text && <p style={{ fontSize: 13, marginTop: 4, lineHeight: 1.5 }}>{r.text}</p>}
           </div>
-        ))
+        ))}
+        <Pager page={page} pageCount={pageCount} setPage={setPage} />
+        </>
       )}
       {session?.admin ? null : session ? (
         <form onSubmit={submit} style={{ marginTop: 10 }}>
@@ -528,10 +560,9 @@ function Landing({ products }) {
 
 // ─── SHOP ─────────────────────────────────────────────────────────────────────
 
-function ProductCard({ product, onAdd, session }) {
+function ProductCard({ product, onAdd }) {
   const [message, setMessage] = useState('');
   const [added, setAdded] = useState(false);
-  const [showReviews, setShowReviews] = useState(false);
 
   function add() {
     onAdd(product, message);
@@ -542,13 +573,16 @@ function ProductCard({ product, onAdd, session }) {
 
   return (
     <div className="card product-card">
-      {product.image_url ? (
-        <img src={product.image_url} alt={product.name} />
-      ) : (
-        <div className="img-placeholder">{BRAND_INITIALS}</div>
-      )}
+      <a href={`#/product/${product.id}`} className="product-thumb" aria-label={`View ${product.name}`}>
+        {product.image_url ? (
+          <img src={product.image_url} alt={product.name} />
+        ) : (
+          <div className="img-placeholder">{BRAND_INITIALS}</div>
+        )}
+        <span className="product-thumb-hint">🔍 View details</span>
+      </a>
       <div className="body">
-        <strong>{product.name}</strong>
+        <a href={`#/product/${product.id}`} className="product-title-link"><strong>{product.name}</strong></a>
         <span className="desc">{product.description}</span>
         <span className="price">{rupees(product.price_paise)}</span>
         {!product.in_stock && <span className="badge badge-oos">Out of stock</span>}
@@ -574,10 +608,81 @@ function ProductCard({ product, onAdd, session }) {
             {product.tags.map((t) => <span key={t} className="ptag">{t}</span>)}
           </span>
         )}
-        <button type="button" className="link-btn" onClick={() => setShowReviews(!showReviews)}>
-          {showReviews ? 'Hide reviews' : 'Reviews'}
-        </button>
-        {showReviews && <ProductReviews productId={product.id} session={session} />}
+        <a href={`#/product/${product.id}`} className="link-btn">See details &amp; reviews →</a>
+      </div>
+    </div>
+  );
+}
+
+// ─── PRODUCT DETAIL ───────────────────────────────────────────────────────────
+
+function ProductDetail({ products, productId, onAdd, session }) {
+  const [message, setMessage] = useState('');
+  const [added, setAdded] = useState(false);
+  const product = products.find((p) => String(p.id) === String(productId));
+
+  if (products.length === 0) {
+    return <div className="page"><p className="empty">Loading…</p></div>;
+  }
+  if (!product) {
+    return (
+      <div className="page">
+        <p className="empty">That product could not be found.</p>
+        <a href="#/shop" className="btn btn-ghost btn-sm">← Back to shop</a>
+      </div>
+    );
+  }
+
+  function add() {
+    onAdd(product, message);
+    setMessage('');
+    setAdded(true);
+    setTimeout(() => setAdded(false), 1500);
+  }
+
+  return (
+    <div className="page" style={{ maxWidth: 880 }}>
+      <a href="#/shop" className="link-btn" style={{ marginBottom: 18, display: 'inline-block' }}>← Back to shop</a>
+      <div className="product-detail">
+        <div className="product-detail-media">
+          {product.image_url ? (
+            <img src={product.image_url} alt={product.name} />
+          ) : (
+            <div className="img-placeholder" style={{ height: '100%' }}>{BRAND_INITIALS}</div>
+          )}
+        </div>
+        <div className="product-detail-body">
+          <h1 style={{ margin: 0 }}>{product.name}</h1>
+          <span className="price" style={{ fontSize: 20 }}>{rupees(product.price_paise)}</span>
+          {!product.in_stock && <span className="badge badge-oos">Out of stock</span>}
+          {product.description && <p style={{ color: 'var(--slate)', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{product.description}</p>}
+          {(product.tags || []).length > 0 && (
+            <span className="product-tags">
+              {product.tags.map((t) => <span key={t} className="ptag">{t}</span>)}
+            </span>
+          )}
+          {onAdd && product.in_stock && (
+            <>
+              {product.customizable && (
+                <div className="field" style={{ marginBottom: 0, marginTop: 10 }}>
+                  <label>{product.custom_label || 'Your message'}</label>
+                  <input
+                    value={message}
+                    onChange={(e) => setMessage(e.target.value.slice(0, 200))}
+                    placeholder="e.g. Happy Birthday Asha!"
+                  />
+                </div>
+              )}
+              <button className="btn" style={{ marginTop: 10, alignSelf: 'flex-start' }} onClick={add}>
+                {added ? 'Added ✓' : 'Add to Cart'}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+      <h2>Reviews</h2>
+      <div className="card">
+        <ProductReviews productId={product.id} session={session} />
       </div>
     </div>
   );
@@ -588,7 +693,6 @@ const SHOP_PAGE_SIZE = 12;
 function Shop({ products, onAdd, session }) {
   const [query, setQuery] = useState('');
   const [tag, setTag] = useState('');
-  const [page, setPage] = useState(0);
 
   const allTags = [...new Set(products.flatMap((p) => p.tags || []))].sort();
   const q = query.trim().toLowerCase();
@@ -602,9 +706,7 @@ function Shop({ products, onAdd, session }) {
     );
   });
 
-  const pageCount = Math.max(1, Math.ceil(filtered.length / SHOP_PAGE_SIZE));
-  const safePage = Math.min(page, pageCount - 1);
-  const pageSlice = filtered.slice(safePage * SHOP_PAGE_SIZE, (safePage + 1) * SHOP_PAGE_SIZE);
+  const { page: safePage, setPage, pageCount, slice: pageSlice } = usePager(filtered, SHOP_PAGE_SIZE);
 
   return (
     <div className="page">
@@ -645,19 +747,7 @@ function Shop({ products, onAdd, session }) {
               ))}
             </div>
           )}
-          {pageCount > 1 && (
-            <div className="shop-pager">
-              <button type="button" className="btn btn-sm btn-ghost" disabled={safePage <= 0}
-                onClick={() => setPage(safePage - 1)}>
-                ← Previous
-              </button>
-              <span>Page {safePage + 1} of {pageCount} · {filtered.length} products</span>
-              <button type="button" className="btn btn-sm btn-ghost" disabled={safePage >= pageCount - 1}
-                onClick={() => setPage(safePage + 1)}>
-                Next →
-              </button>
-            </div>
-          )}
+          <Pager page={safePage} pageCount={pageCount} setPage={setPage} label={`${filtered.length} products`} />
         </>
       )}
     </div>
@@ -932,6 +1022,8 @@ function MyOrders() {
     }
   }
 
+  const { page, setPage, pageCount, slice } = usePager(orders || [], 5);
+
   if (!orders) return <div className="page"><p className="empty">Loading your orders…</p></div>;
 
   return (
@@ -940,7 +1032,8 @@ function MyOrders() {
       {orders.length === 0 ? (
         <p className="empty">No orders yet — your memories await!</p>
       ) : (
-        orders.map((o) => (
+        <>
+        {slice.map((o) => (
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <strong>{new Date(o.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
@@ -1025,7 +1118,9 @@ function MyOrders() {
               </div>
             )}
           </div>
-        ))
+        ))}
+        <Pager page={page} pageCount={pageCount} setPage={setPage} label={`${orders.length} orders`} />
+        </>
       )}
     </div>
   );
@@ -1193,6 +1288,8 @@ function AdminProducts() {
   }, []);
   useEffect(load, [load]);
 
+  const productPage = usePager(products, 10);
+
   const set = (k) => (e) =>
     setForm({ ...form, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
 
@@ -1328,7 +1425,7 @@ function AdminProducts() {
             <tr><th>Image</th><th>Name</th><th>Price</th><th>Tags</th><th>Custom</th><th>Stock</th><th>Actions</th></tr>
           </thead>
           <tbody>
-            {products.map((p) => (
+            {productPage.slice.map((p) => (
               <tr key={p.id}>
                 <td>
                   {p.image_url
@@ -1357,6 +1454,7 @@ function AdminProducts() {
           </tbody>
         </table>
       </div>
+      <Pager page={productPage.page} pageCount={productPage.pageCount} setPage={productPage.setPage} label={`${products.length} products`} />
     </div>
   );
 }
@@ -1473,6 +1571,9 @@ function AdminOrders() {
   }, [filter]);
   useEffect(load, [load]);
 
+  const { page, setPage, pageCount, slice } = usePager(orders, 10);
+  useEffect(() => { setPage(0); }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [shipping, setShipping] = useState(null); // { orderId, courier, tracking_id }
   const [shipError, setShipError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -1588,7 +1689,8 @@ function AdminOrders() {
       {orders.length === 0 ? (
         <p className="empty">No {filter === 'all' ? '' : filter} orders</p>
       ) : (
-        orders.map((o) => (
+        <>
+        {slice.map((o) => (
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
@@ -1704,7 +1806,9 @@ function AdminOrders() {
               </form>
             )}
           </div>
-        ))
+        ))}
+        <Pager page={page} pageCount={pageCount} setPage={setPage} label={`${orders.length} orders`} />
+        </>
       )}
     </div>
   );
@@ -1722,6 +1826,9 @@ function AdminReviews() {
   useEffect(load, [load]);
 
   const [busy, setBusy] = useState(false);
+
+  const { page, setPage, pageCount, slice } = usePager(reviews, 10);
+  useEffect(() => { setPage(0); }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function patch(review, changes) {
     setBusy(true);
@@ -1751,7 +1858,8 @@ function AdminReviews() {
       {reviews.length === 0 ? (
         <p className="empty">No {filter === 'all' ? '' : filter} reviews</p>
       ) : (
-        reviews.map((r) => (
+        <>
+        {slice.map((r) => (
           <div key={r.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <div>
@@ -1782,7 +1890,9 @@ function AdminReviews() {
               <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => remove(r)}>Delete</button>
             </div>
           </div>
-        ))
+        ))}
+        <Pager page={page} pageCount={pageCount} setPage={setPage} label={`${reviews.length} reviews`} />
+        </>
       )}
     </div>
   );
@@ -1811,13 +1921,44 @@ function stopImpersonation() {
   window.location.reload();
 }
 
+// Numeric columns default to descending (highest first); text/date columns default to ascending.
+const USER_SORT_DEFAULT_DIR = { name: 'asc', created_at: 'desc', order_count: 'desc', spent_paise: 'desc', last_login: 'desc' };
+
+function SortTh({ label, sortKey, sort, setSort }) {
+  const active = sort.key === sortKey;
+  return (
+    <th
+      style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}
+      onClick={() => setSort(active
+        ? { key: sortKey, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
+        : { key: sortKey, dir: USER_SORT_DEFAULT_DIR[sortKey] || 'asc' })}
+    >
+      {label}{active ? (sort.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+    </th>
+  );
+}
+
 function AdminUsers({ session }) {
   const [users, setUsers] = useState(null);
   const [error, setError] = useState('');
+  const [sort, setSort] = useState({ key: 'created_at', dir: 'desc' });
 
   useEffect(() => {
     fetchAdminUsers().then(setUsers).catch(() => setUsers([]));
   }, []);
+
+  const sortedUsers = [...(users || [])].sort((a, b) => {
+    const mul = sort.dir === 'asc' ? 1 : -1;
+    if (sort.key === 'name') return a.name.localeCompare(b.name) * mul;
+    if (sort.key === 'created_at' || sort.key === 'last_login') {
+      const av = a[sort.key] ? new Date(a[sort.key]).getTime() : 0;
+      const bv = b[sort.key] ? new Date(b[sort.key]).getTime() : 0;
+      return (av - bv) * mul;
+    }
+    return ((a[sort.key] || 0) - (b[sort.key] || 0)) * mul;
+  });
+
+  const { page, setPage, pageCount, slice } = usePager(sortedUsers, 10);
 
   async function impersonate(u) {
     setError('');
@@ -1835,18 +1976,29 @@ function AdminUsers({ session }) {
       ) : users.length === 0 ? (
         <p className="empty">No registered users yet.</p>
       ) : (
+        <>
         <div className="table-wrap card" style={{ padding: 0 }}>
           <table>
             <thead>
-              <tr><th>Name</th><th>Email</th><th>Verified</th><th>Joined</th><th>Orders</th><th>Total spent</th><th>Actions</th></tr>
+              <tr>
+                <SortTh label="Name" sortKey="name" sort={sort} setSort={setSort} />
+                <th>Email</th>
+                <th>Verified</th>
+                <SortTh label="Joined" sortKey="created_at" sort={sort} setSort={setSort} />
+                <SortTh label="Last login" sortKey="last_login" sort={sort} setSort={setSort} />
+                <SortTh label="Orders" sortKey="order_count" sort={sort} setSort={setSort} />
+                <SortTh label="Total spent" sortKey="spent_paise" sort={sort} setSort={setSort} />
+                <th>Actions</th>
+              </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {slice.map((u) => (
                 <tr key={u.email}>
                   <td>{u.name}</td>
                   <td>{u.email}</td>
                   <td>{u.verified ? <span className="badge badge-fulfilled">verified</span> : <span className="badge badge-pending">pending</span>}</td>
                   <td>{u.created_at ? new Date(u.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</td>
+                  <td>{u.last_login ? new Date(u.last_login).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
                   <td>{u.order_count}</td>
                   <td>{u.spent_paise > 0 ? rupees(u.spent_paise) : '—'}</td>
                   <td>
@@ -1859,7 +2011,197 @@ function AdminUsers({ session }) {
             </tbody>
           </table>
         </div>
+        <Pager page={page} pageCount={pageCount} setPage={setPage} label={`${users.length} users`} />
+        </>
       )}
+    </div>
+  );
+}
+
+// ─── ADMIN: MARKETING ─────────────────────────────────────────────────────────
+
+function AdminMarketing() {
+  const [users, setUsers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [selectedUsers, setSelectedUsers] = useState(() => new Set());
+  const [selectedProducts, setSelectedProducts] = useState(() => new Set());
+  const [subject, setSubject] = useState('');
+  const [message, setMessage] = useState('');
+  const [userQuery, setUserQuery] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [sort, setSort] = useState({ key: 'created_at', dir: 'desc' });
+
+  useEffect(() => {
+    fetchAdminUsers().then(setUsers).catch(() => setUsers([]));
+    fetchProducts().then(setProducts).catch(() => setProducts([]));
+  }, []);
+
+  const q = userQuery.trim().toLowerCase();
+  const filteredUsers = users
+    .filter((u) => !q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    .sort((a, b) => {
+      const mul = sort.dir === 'asc' ? 1 : -1;
+      if (sort.key === 'name') return a.name.localeCompare(b.name) * mul;
+      if (sort.key === 'created_at' || sort.key === 'last_login') {
+        const av = a[sort.key] ? new Date(a[sort.key]).getTime() : 0;
+        const bv = b[sort.key] ? new Date(b[sort.key]).getTime() : 0;
+        return (av - bv) * mul;
+      }
+      return ((a[sort.key] || 0) - (b[sort.key] || 0)) * mul;
+    });
+
+  const { page: userPage, setPage: setUserPage, pageCount: userPageCount, slice: userSlice } = usePager(filteredUsers, 10);
+  const { page: productPage, setPage: setProductPage, pageCount: productPageCount, slice: productSlice } = usePager(products, 8);
+
+  function toggleUser(email) {
+    const next = new Set(selectedUsers);
+    if (next.has(email)) next.delete(email); else next.add(email);
+    setSelectedUsers(next);
+  }
+  function toggleProduct(id) {
+    const next = new Set(selectedProducts);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedProducts(next);
+  }
+
+  const allFilteredSelected = filteredUsers.length > 0 && filteredUsers.every((u) => selectedUsers.has(u.email));
+
+  function toggleSelectAllFiltered() {
+    const next = new Set(selectedUsers);
+    if (allFilteredSelected) filteredUsers.forEach((u) => next.delete(u.email));
+    else filteredUsers.forEach((u) => next.add(u.email));
+    setSelectedUsers(next);
+  }
+
+  async function send(e) {
+    e.preventDefault();
+    setError('');
+    setNotice('');
+    if (selectedUsers.size === 0) { setError('Select at least one recipient'); return; }
+    if (!subject.trim() || !message.trim()) { setError('Subject and message are required'); return; }
+    if (!window.confirm(`Send this email to ${selectedUsers.size} customer(s)?`)) return;
+    setBusy(true);
+    const { ok, data } = await sendMarketingEmail({
+      userEmails: [...selectedUsers],
+      productIds: [...selectedProducts],
+      subject: subject.trim(),
+      message: message.trim(),
+    });
+    setBusy(false);
+    if (ok) {
+      setNotice(`Sent to ${data.sent} of ${data.total} recipient(s).${data.failed ? ` ${data.failed} failed.` : ''}`);
+    } else {
+      setError(data.error || 'Could not send campaign');
+    }
+  }
+
+  return (
+    <div className="page">
+      <h1>Admin · Marketing</h1>
+      <p style={{ color: 'var(--slate)', marginTop: -18, marginBottom: 24 }}>
+        Send a festival or event offer email to selected customers, featuring selected products.
+      </p>
+
+      <form onSubmit={send}>
+        <h2 style={{ marginTop: 0 }}>1. Recipients</h2>
+        <div className="card" style={{ marginBottom: 24 }}>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+            <input
+              type="search"
+              className="shop-search"
+              style={{ maxWidth: 280 }}
+              placeholder="Search by name or email…"
+              value={userQuery}
+              onChange={(e) => { setUserQuery(e.target.value); setUserPage(0); }}
+            />
+            <button type="button" className="btn btn-sm btn-ghost" onClick={toggleSelectAllFiltered}>
+              {allFilteredSelected ? 'Unselect all' : 'Select all'}{userQuery ? ' (filtered)' : ''}
+            </button>
+            <span style={{ fontSize: 13, color: 'var(--slate)' }}>{selectedUsers.size} selected</span>
+          </div>
+          <div className="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <SortTh label="Name" sortKey="name" sort={sort} setSort={setSort} />
+                  <th>Email</th>
+                  <SortTh label="Last login" sortKey="last_login" sort={sort} setSort={setSort} />
+                  <SortTh label="Orders" sortKey="order_count" sort={sort} setSort={setSort} />
+                  <SortTh label="Total spent" sortKey="spent_paise" sort={sort} setSort={setSort} />
+                </tr>
+              </thead>
+              <tbody>
+                {userSlice.map((u) => (
+                  <tr key={u.email}>
+                    <td><input type="checkbox" checked={selectedUsers.has(u.email)} onChange={() => toggleUser(u.email)} /></td>
+                    <td>{u.name}</td>
+                    <td>{u.email}</td>
+                    <td>{u.last_login ? new Date(u.last_login).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                    <td>{u.order_count}</td>
+                    <td>{u.spent_paise > 0 ? rupees(u.spent_paise) : '—'}</td>
+                  </tr>
+                ))}
+                {filteredUsers.length === 0 && (
+                  <tr><td colSpan={6} style={{ textAlign: 'center', color: 'var(--slate)' }}>No users match</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={userPage} pageCount={userPageCount} setPage={setUserPage} label={`${filteredUsers.length} users`} />
+        </div>
+
+        <h2>2. Products to feature</h2>
+        <div className="card" style={{ marginBottom: 24 }}>
+          {products.length === 0 ? <p className="empty">No products yet</p> : (
+            <>
+              <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))' }}>
+                {productSlice.map((p) => (
+                  <label
+                    key={p.id}
+                    className={selectedProducts.has(p.id) ? 'addr-option active' : 'addr-option'}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <input type="checkbox" checked={selectedProducts.has(p.id)} onChange={() => toggleProduct(p.id)} />
+                    {p.image_url
+                      ? <img src={p.image_url} alt="" style={{ width: 44, height: 34, objectFit: 'cover', borderRadius: 4 }} />
+                      : <div className="img-placeholder" style={{ width: 44, height: 34, fontSize: 14, borderRadius: 4 }}>{BRAND_INITIALS}</div>}
+                    <span>
+                      <strong>{p.name}</strong>
+                      <em>{rupees(p.price_paise)}</em>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <Pager page={productPage} pageCount={productPageCount} setPage={setProductPage} label={`${products.length} products`} />
+            </>
+          )}
+        </div>
+
+        <h2>3. Message</h2>
+        <div className="card" style={{ marginBottom: 24, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          <div className="field">
+            <label>Subject</label>
+            <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="e.g. Diwali Dhamaka — 20% off this week!" maxLength={150} />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>Message</label>
+            <textarea
+              className="review-input"
+              rows={6}
+              value={message}
+              onChange={(e) => setMessage(e.target.value.slice(0, 2000))}
+              placeholder="Write your festive offer message here…"
+            />
+          </div>
+        </div>
+
+        {error && <p className="error">{error}</p>}
+        {notice && <p className="success">{notice}</p>}
+        <button className="btn" disabled={busy}>{busy ? 'Sending…' : `Send to ${selectedUsers.size} customer(s)`}</button>
+      </form>
     </div>
   );
 }
@@ -1953,6 +2295,15 @@ export default function App() {
     // The admin manages the shop but doesn't buy from it — no cart. Use
     // "Impersonate" on Admin · Users to act on a customer's behalf.
     content = <Shop products={products} onAdd={session?.admin ? undefined : addToCart} session={session} />;
+  } else if (route.startsWith('/product/')) {
+    content = (
+      <ProductDetail
+        products={products}
+        productId={route.slice('/product/'.length)}
+        onAdd={session?.admin ? undefined : addToCart}
+        session={session}
+      />
+    );
   } else if (route === '/cart' && !session?.admin) {
     content = <Cart cart={cart} setCart={setCart} session={session} />;
   } else if (route === '/checkout' && !session?.admin) {
@@ -1969,6 +2320,8 @@ export default function App() {
     content = <AdminReviews />;
   } else if (route === '/admin/users' && session?.admin) {
     content = <AdminUsers session={session} />;
+  } else if (route === '/admin/marketing' && session?.admin) {
+    content = <AdminMarketing />;
   } else {
     content = <Landing products={products} />;
   }
@@ -1992,6 +2345,7 @@ export default function App() {
         {session?.admin && link('/admin/orders', 'Orders')}
         {session?.admin && link('/admin/reviews', 'Reviews')}
         {session?.admin && link('/admin/users', 'Users')}
+        {session?.admin && link('/admin/marketing', 'Marketing')}
         <span className="nav-sep" />
         {session ? (
           <UserMenu session={session} onLogout={logout} route={route} />

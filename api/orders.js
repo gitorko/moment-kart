@@ -183,10 +183,18 @@ async function ordersHandler(req, res) {
           FROM orders o JOIN users u ON u.id = o.user_id WHERE o.id = ${id}
         `;
         if (row) {
+          // Order items only store productId — look up current images for the email.
+          const productIds = (row.items || []).map((i) => i.productId).filter(Boolean);
+          const products = productIds.length
+            ? await sql`SELECT id, image_url FROM products WHERE id = ANY(${productIds})`
+            : [];
+          const imageById = Object.fromEntries(products.map((p) => [p.id, p.image_url]));
+          const items = (row.items || []).map((i) => ({ ...i, image_url: imageById[i.productId] || '' }));
+
           await sendShippedEmail(row.email, {
             order_no: row.order_no,
             name: row.name,
-            items: row.items,
+            items,
             courier: row.courier,
             tracking_id: row.tracking_id,
             address: row.address,

@@ -133,6 +133,7 @@ export async function authAction(body) {
   if (body.action === 'verify') {
     if (!user || codes[email] !== String(body.code)) return { ok: false, data: { error: 'Invalid verification code' } };
     user.verified = true;
+    user.last_login = new Date().toISOString();
     write(USERS_KEY, users);
     delete codes[email];
     write(CODES_KEY, codes);
@@ -148,6 +149,7 @@ export async function authAction(body) {
     if (!user || codes[email] !== String(body.code)) return { ok: false, data: { error: 'Invalid reset code' } };
     user.password = body.password;
     user.verified = true;
+    user.last_login = new Date().toISOString();
     write(USERS_KEY, users);
     delete codes[email];
     write(CODES_KEY, codes);
@@ -163,6 +165,8 @@ export async function authAction(body) {
       issueDevCode(codes, email);
       return { ok: false, data: { error: 'Email not verified', needsVerification: true } };
     }
+    user.last_login = new Date().toISOString();
+    write(USERS_KEY, users);
     return { ok: true, data: { token: devToken(user) } };
   }
   return { ok: false, data: { error: 'Unknown action' } };
@@ -395,8 +399,20 @@ export async function fetchAdminUsers() {
   };
   return read(USERS_KEY, []).map((u) => ({
     email: u.email, name: u.name, verified: !!u.verified,
-    created_at: u.created_at || null, ...activity(u.email),
+    created_at: u.created_at || null, last_login: u.last_login || null, ...activity(u.email),
   }));
+}
+
+// Admin: send a marketing/offer email to selected users, featuring selected products.
+export async function sendMarketingEmail({ userEmails, productIds, subject, message }) {
+  if (!IS_DEV) {
+    return toResult(authFetch('/api/marketing', {
+      method: 'POST',
+      body: JSON.stringify({ userEmails, productIds, subject, message }),
+    }));
+  }
+  // Dev mode has no real SMTP — simulate success so the admin UI can be exercised locally.
+  return { ok: true, data: { sent: userEmails.length, failed: 0, total: userEmails.length } };
 }
 
 // ─── Reviews ──────────────────────────────────────────────────────────────────

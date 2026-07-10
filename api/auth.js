@@ -88,7 +88,7 @@ async function authHandler(req, res) {
       log('verify_failed', { email, reason: 'expired' });
       return res.status(400).json({ error: 'Code expired — request a new one' });
     }
-    await sql`UPDATE users SET verified = TRUE WHERE email = ${email}`;
+    await sql`UPDATE users SET verified = TRUE, last_login = NOW() WHERE email = ${email}`;
     await sql`DELETE FROM verification_codes WHERE email = ${email}`;
     const [user] = await sql`SELECT id, email, name FROM users WHERE email = ${email}`;
     log('verify_success', { email });
@@ -117,7 +117,7 @@ async function authHandler(req, res) {
       log('reset_failed', { email, reason: 'expired' });
       return res.status(400).json({ error: 'Code expired — request a new one' });
     }
-    await sql`UPDATE users SET password_hash = ${hashPassword(password)}, verified = TRUE WHERE email = ${email}`;
+    await sql`UPDATE users SET password_hash = ${hashPassword(password)}, verified = TRUE, last_login = NOW() WHERE email = ${email}`;
     await sql`DELETE FROM verification_codes WHERE email = ${email}`;
     const [user] = await sql`SELECT id, email, name FROM users WHERE email = ${email}`;
     log('password_reset', { email });
@@ -134,12 +134,12 @@ async function authHandler(req, res) {
       if (!admin) {
         const id = randomUUID();
         await sql`
-          INSERT INTO users (id, email, name, password_hash, verified)
-          VALUES (${id}, ${email}, ${'Admin'}, ${hashPassword(password)}, TRUE)
+          INSERT INTO users (id, email, name, password_hash, verified, last_login)
+          VALUES (${id}, ${email}, ${'Admin'}, ${hashPassword(password)}, TRUE, NOW())
         `;
         admin = { id, email, name: 'Admin' };
       } else {
-        await sql`UPDATE users SET verified = TRUE WHERE id = ${admin.id}`;
+        await sql`UPDATE users SET verified = TRUE, last_login = NOW() WHERE id = ${admin.id}`;
       }
       log('admin_login', { email });
       return res.json({ token: createToken(admin), admin: true });
@@ -155,6 +155,7 @@ async function authHandler(req, res) {
       log('login_blocked_unverified', { email });
       return res.status(403).json({ error: 'Email not verified', needsVerification: true });
     }
+    await sql`UPDATE users SET last_login = NOW() WHERE id = ${user.id}`;
     log('login_success', { email });
     return res.json({ token: createToken(user), admin: isAdminEmail(email) });
   }

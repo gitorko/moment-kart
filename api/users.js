@@ -24,7 +24,7 @@ export default async function handler(req, res) {
 
     if (req.method !== 'GET') return res.status(405).end();
     const rows = await sql`
-      SELECT u.email, u.name, u.verified, u.created_at,
+      SELECT u.email, u.name, u.verified, u.created_at, u.last_login,
              COUNT(o.id)::int AS order_count,
              COALESCE(SUM(o.total_paise), 0)::bigint AS spent_paise
       FROM users u

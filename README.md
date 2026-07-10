@@ -45,6 +45,16 @@ Verification codes (OTPs) are always recoverable from logs, never shown in the U
 
 Drop images into `src/assets/carousel/` — they are shown in the "Signature Pieces" carousel in numeric filename order.
 
-## Notes
+## Features
 
-Database tables are created automatically on first API call. Env var changes in Vercel require a redeploy.
+1. review product, with approval from admin
+2. hight review on home page where customer review sticks on home page.
+3. export import to csv for order. you have 50 MB free db, you can clean up and take backup.
+4. user impersonation to see what their page looks like
+5. user login attempt tracking when they logged in.
+6. user spend - how much they spent to target for emails and marketing.
+7. email sent on dispatched
+8. payment not received flow.
+9. tag based sku, with search on tag event like "anniversary" "rakhi"
+10. mobile friendly site
+11. marketing mail sender
