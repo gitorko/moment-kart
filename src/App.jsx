@@ -2398,7 +2398,7 @@ function UserMenu({ session, onLogout, route }) {
       {open && (
         <div className="user-menu-dropdown">
           <a href="#/profile" onClick={() => setOpen(false)}>My Profile</a>
-          <a href="#/orders" onClick={() => setOpen(false)}>My Orders</a>
+          {!session.admin && <a href="#/orders" onClick={() => setOpen(false)}>My Orders</a>}
           <button type="button" onClick={() => { setOpen(false); onLogout(); }}>Logout</button>
         </div>
       )}
