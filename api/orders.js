@@ -13,6 +13,9 @@ export default async function handler(req, res) {
   }
 }
 
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const validDate = (s) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : todayStr());
+
 async function ordersHandler(req, res) {
   const sql = db();
   await ensureSchema(sql);
@@ -53,44 +56,7 @@ async function ordersHandler(req, res) {
     const user = requireAuth(req, res);
     if (!user) return;
 
-    // Admin path: restore orders from a CSV export. Users are matched by email;
-    // rows whose user no longer exists are skipped.
-    if (req.query.scope === 'import') {
-      if (!user.admin) return res.status(403).json({ error: 'Admin only' });
-      const rows = Array.isArray(req.body?.orders) ? req.body.orders : [];
-      if (rows.length === 0) return res.status(400).json({ error: 'No orders to import' });
-      let imported = 0;
-      let skipped = 0;
-      for (const row of rows) {
-        if (!row.id || !row.user_email || !Array.isArray(row.items) || !row.address) { skipped++; continue; }
-        const [u] = await sql`SELECT id FROM users WHERE email = ${String(row.user_email).toLowerCase()}`;
-        if (!u) { skipped++; continue; }
-        let orderNo = parseInt(row.order_no, 10);
-        if (!Number.isInteger(orderNo)) {
-          const [m] = await sql`SELECT COALESCE(MAX(order_no), 1000) + 1 AS next FROM orders`;
-          orderNo = Number(m.next);
-        }
-        await sql`
-          INSERT INTO orders (id, order_no, user_id, items, address, total_paise, upi_ref, status, courier, tracking_id, created_at)
-          VALUES (${row.id}, ${orderNo}, ${u.id}, ${JSON.stringify(row.items)}, ${JSON.stringify(row.address)},
-                  ${parseInt(row.total_paise, 10) || 0}, ${String(row.upi_ref || '')},
-                  ${String(row.status || 'pending')}, ${row.courier || null}, ${row.tracking_id || null},
-                  ${row.created_at || new Date().toISOString()})
-          ON CONFLICT (id) DO UPDATE SET
-            order_no = EXCLUDED.order_no,
-            items = EXCLUDED.items, address = EXCLUDED.address, total_paise = EXCLUDED.total_paise,
-            upi_ref = EXCLUDED.upi_ref, status = EXCLUDED.status,
-            courier = EXCLUDED.courier, tracking_id = EXCLUDED.tracking_id, created_at = EXCLUDED.created_at
-        `;
-        imported++;
-      }
-      // Keep the auto-numbering ahead of any imported order numbers.
-      await sql`SELECT setval(pg_get_serial_sequence('orders', 'order_no'), (SELECT COALESCE(MAX(order_no), 1000) FROM orders))`;
-      log('orders_imported', { imported, skipped, by: user.email });
-      return res.json({ imported, skipped });
-    }
-
-    const { items, address, upi_ref } = req.body || {};
+    const { items, address, upi_ref, transaction_date } = req.body || {};
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Cart is empty' });
     }
@@ -123,9 +89,9 @@ async function ordersHandler(req, res) {
 
     const id = randomUUID();
     const [created] = await sql`
-      INSERT INTO orders (id, user_id, items, address, total_paise, upi_ref)
+      INSERT INTO orders (id, user_id, items, address, total_paise, upi_ref, paid_at)
       VALUES (${id}, ${user.uid}, ${JSON.stringify(verifiedItems)}, ${JSON.stringify(address)},
-              ${total}, ${String(upi_ref).trim()})
+              ${total}, ${String(upi_ref).trim()}, ${validDate(transaction_date)})
       RETURNING order_no
     `;
 
@@ -145,7 +111,7 @@ async function ordersHandler(req, res) {
   if (req.method === 'PUT') {
     const user = requireAuth(req, res);
     if (!user) return;
-    const { id, status, courier, tracking_id, upi_ref } = req.body || {};
+    const { id, status, courier, tracking_id, upi_ref, transaction_date } = req.body || {};
 
     // Customer path: resubmit payment on their own flagged order.
     if (upi_ref !== undefined && !status) {
@@ -157,7 +123,10 @@ async function ordersHandler(req, res) {
       if (order.status !== 'payment_issue') {
         return res.status(400).json({ error: 'This order is not awaiting payment confirmation' });
       }
-      await sql`UPDATE orders SET upi_ref = ${String(upi_ref).trim()}, status = 'pending' WHERE id = ${id}`;
+      await sql`
+        UPDATE orders SET upi_ref = ${String(upi_ref).trim()}, status = 'pending', paid_at = ${validDate(transaction_date)}
+        WHERE id = ${id}
+      `;
       log('payment_resubmitted', { orderId: id, userId: user.uid });
       return res.json({ ok: true });
     }
@@ -173,7 +142,7 @@ async function ordersHandler(req, res) {
     if (status === 'shipped') {
       await sql`
         UPDATE orders SET status = 'shipped',
-          courier = ${String(courier).trim()}, tracking_id = ${String(tracking_id).trim()}
+          courier = ${String(courier).trim()}, tracking_id = ${String(tracking_id).trim()}, shipped_at = ${validDate(req.body?.shipped_date)}
         WHERE id = ${id}
       `;
       // Notify the customer. Email failure must not fail the status change.

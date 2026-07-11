@@ -1,5 +1,5 @@
 import { db, ensureSchema } from './_db.js';
-import { requireAuth } from './_auth.js';
+import { requireAuth, hashPassword, checkPassword } from './_auth.js';
 
 // The users.address JSONB column holds an array of addresses.
 // Legacy rows may hold a single address object — normalize to an array on read.
@@ -29,6 +29,18 @@ export default async function handler(req, res) {
       UPDATE users SET name = ${String(name).trim()}, address = ${JSON.stringify(list)}
       WHERE id = ${user.uid}
     `;
+    return res.json({ ok: true });
+  }
+
+  if (req.method === 'PATCH') {
+    const current_password = String(req.body?.current_password || '');
+    const new_password = String(req.body?.new_password || '');
+    if (new_password.length < 6) return res.status(400).json({ error: 'New password must be at least 6 characters' });
+    const [row] = await sql`SELECT password_hash FROM users WHERE id = ${user.uid}`;
+    if (!row || !checkPassword(current_password, row.password_hash)) {
+      return res.status(400).json({ error: 'Current password is incorrect' });
+    }
+    await sql`UPDATE users SET password_hash = ${hashPassword(new_password)} WHERE id = ${user.uid}`;
     return res.json({ ok: true });
   }
 

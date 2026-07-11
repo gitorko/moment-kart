@@ -18,6 +18,13 @@ const normalizeTags = (tags) =>
     ? [...new Set(tags.map((t) => String(t).trim().toLowerCase()).filter(Boolean))].slice(0, 12)
     : [];
 
+// Up to 3 photos; the first is the cover shown on cards. Falls back to the
+// legacy single image_url for products saved before multi-photo support.
+const normalizeImages = (p) => {
+  const images = Array.isArray(p.images) ? p.images.filter(Boolean).slice(0, 3) : [];
+  return images.length > 0 ? images : (p.image_url ? [p.image_url] : []);
+};
+
 async function productsHandler(req, res) {
   const sql = db();
   await ensureSchema(sql);
@@ -25,10 +32,10 @@ async function productsHandler(req, res) {
   if (req.method === 'GET') {
     // Public: the shop needs the catalog without login.
     const rows = await sql`
-      SELECT id, name, description, price_paise, image_url, customizable, custom_label, in_stock, tags
+      SELECT id, name, description, price_paise, image_url, images, customizable, custom_label, in_stock, tags, featured
       FROM products ORDER BY created_at DESC
     `;
-    return res.json(rows);
+    return res.json(rows.map((r) => ({ ...r, images: normalizeImages(r) })));
   }
 
   const admin = requireAdmin(req, res);
@@ -40,11 +47,12 @@ async function productsHandler(req, res) {
       return res.status(400).json({ error: 'Name and a positive price are required' });
     }
     const id = randomUUID();
+    const images = normalizeImages(p);
     await sql`
-      INSERT INTO products (id, name, description, price_paise, image_url, customizable, custom_label, in_stock, tags)
-      VALUES (${id}, ${p.name}, ${p.description || ''}, ${p.price_paise}, ${p.image_url || ''},
+      INSERT INTO products (id, name, description, price_paise, image_url, images, customizable, custom_label, in_stock, tags, featured)
+      VALUES (${id}, ${p.name}, ${p.description || ''}, ${p.price_paise}, ${images[0] || ''}, ${JSON.stringify(images)},
               ${!!p.customizable}, ${p.custom_label || 'Your message'}, ${p.in_stock !== false},
-              ${JSON.stringify(normalizeTags(p.tags))})
+              ${JSON.stringify(normalizeTags(p.tags))}, ${!!p.featured})
     `;
     log('product_created', { productId: id, name: p.name, by: admin.email });
     return res.status(201).json({ id });
@@ -56,12 +64,13 @@ async function productsHandler(req, res) {
     if (!p.name || !Number.isInteger(p.price_paise) || p.price_paise <= 0) {
       return res.status(400).json({ error: 'Name and a positive price are required' });
     }
+    const images = normalizeImages(p);
     await sql`
       UPDATE products SET
         name = ${p.name}, description = ${p.description || ''}, price_paise = ${p.price_paise},
-        image_url = ${p.image_url || ''}, customizable = ${!!p.customizable},
+        image_url = ${images[0] || ''}, images = ${JSON.stringify(images)}, customizable = ${!!p.customizable},
         custom_label = ${p.custom_label || 'Your message'}, in_stock = ${p.in_stock !== false},
-        tags = ${JSON.stringify(normalizeTags(p.tags))}
+        tags = ${JSON.stringify(normalizeTags(p.tags))}, featured = ${!!p.featured}
       WHERE id = ${p.id}
     `;
     log('product_updated', { productId: p.id, name: p.name, inStock: p.in_stock !== false, by: admin.email });

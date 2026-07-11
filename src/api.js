@@ -53,6 +53,7 @@ const CODES_KEY = 'mk-dev-codes';
 const REVIEWS_KEY = 'mk-dev-reviews';
 
 const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const todayStr = () => new Date().toISOString().slice(0, 10);
 
 // Dev admin credentials come from .env.local (ADMIN_EMAIL / ADMIN_PASSWORD —
 // the same names used in Vercel for production). Injected by vite.config.js in dev only.
@@ -235,10 +236,28 @@ export async function saveProfile({ name, addresses }) {
   return { ok: true, data: {} };
 }
 
+export async function changePassword(current_password, new_password) {
+  if (!IS_DEV) {
+    return toResult(authFetch('/api/profile', { method: 'PATCH', body: JSON.stringify({ current_password, new_password }) }));
+  }
+  if (String(new_password || '').length < 6) {
+    return { ok: false, data: { error: 'New password must be at least 6 characters' } };
+  }
+  const me = devCurrentUser();
+  const users = read(USERS_KEY, []);
+  const user = users.find((u) => u.email === me?.email);
+  if (!user || user.password !== current_password) {
+    return { ok: false, data: { error: 'Current password is incorrect' } };
+  }
+  user.password = new_password;
+  write(USERS_KEY, users);
+  return { ok: true, data: {} };
+}
+
 // ─── Orders ───────────────────────────────────────────────────────────────────
 
-export async function placeOrder({ items, address, upi_ref }) {
-  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'POST', body: JSON.stringify({ items, address, upi_ref }) }));
+export async function placeOrder({ items, address, upi_ref, transaction_date }) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'POST', body: JSON.stringify({ items, address, upi_ref, transaction_date }) }));
 
   const me = devCurrentUser();
   const products = read(PRODUCTS_KEY, []);
@@ -258,6 +277,7 @@ export async function placeOrder({ items, address, upi_ref }) {
     id: uid(), order_no: orderNo, user_email: me?.email, user_name: me?.name,
     items: verifiedItems, address, total_paise: total,
     upi_ref, status: 'pending', created_at: new Date().toISOString(),
+    paid_at: transaction_date || todayStr(),
   });
   write(ORDERS_KEY, orders);
 
@@ -292,8 +312,8 @@ export async function fetchAdminOrders(filter) {
 }
 
 // Customer resubmits payment on an order flagged "payment not received".
-export async function resubmitPayment(id, upi_ref) {
-  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, upi_ref }) }));
+export async function resubmitPayment(id, upi_ref, transaction_date) {
+  if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'PUT', body: JSON.stringify({ id, upi_ref, transaction_date }) }));
   if (String(upi_ref || '').trim().length < 6) {
     return { ok: false, data: { error: 'Valid UPI transaction reference is required' } };
   }
@@ -304,6 +324,7 @@ export async function resubmitPayment(id, upi_ref) {
   }
   order.upi_ref = String(upi_ref).trim();
   order.status = 'pending';
+  order.paid_at = transaction_date || todayStr();
   write(ORDERS_KEY, orders);
   return { ok: true, data: {} };
 }
@@ -320,6 +341,7 @@ export async function setOrderStatus(id, status, extra = {}) {
     if (status === 'shipped') {
       order.courier = extra.courier;
       order.tracking_id = extra.tracking_id;
+      order.shipped_at = extra.shipped_date || todayStr();
       devSendEmail({
         kind: 'shipped',
         to: order.user_email,
@@ -348,32 +370,6 @@ export async function deleteOrders(ids) {
   write(ORDERS_KEY, next);
   const deleted = orders.length - next.length;
   return { ok: true, data: { deleted, skipped: ids.length - deleted } };
-}
-
-// Admin: restore orders from a CSV export.
-export async function importOrders(rows) {
-  if (!IS_DEV) return toResult(authFetch('/api/orders?scope=import', { method: 'POST', body: JSON.stringify({ orders: rows }) }));
-  const orders = read(ORDERS_KEY, []);
-  let imported = 0;
-  let skipped = 0;
-  let nextNo = Math.max(1000, ...orders.map((o) => Number(o.order_no) || 0));
-  for (const row of rows) {
-    if (!row.id || !row.user_email || !Array.isArray(row.items) || !row.address) { skipped++; continue; }
-    const order = {
-      id: row.id, order_no: parseInt(row.order_no, 10) || ++nextNo,
-      user_email: row.user_email, user_name: row.user_name || '',
-      items: row.items, address: row.address, total_paise: parseInt(row.total_paise, 10) || 0,
-      upi_ref: String(row.upi_ref || ''), status: String(row.status || 'pending'),
-      courier: row.courier || undefined, tracking_id: row.tracking_id || undefined,
-      created_at: row.created_at || new Date().toISOString(),
-    };
-    const idx = orders.findIndex((o) => o.id === row.id);
-    if (idx >= 0) orders[idx] = order;
-    else orders.unshift(order);
-    imported++;
-  }
-  write(ORDERS_KEY, orders);
-  return { ok: true, data: { imported, skipped } };
 }
 
 // Admin: get a short-lived token to browse the shop as another user.
@@ -459,9 +455,10 @@ export async function fetchAdminReviews(filter) {
     return res.ok ? res.json() : [];
   }
   const products = read(PRODUCTS_KEY, []);
-  const reviews = read(REVIEWS_KEY, []).map((r) => ({
-    ...r, product_name: products.find((p) => p.id === r.product_id)?.name || '',
-  }));
+  const reviews = read(REVIEWS_KEY, []).map((r) => {
+    const product = products.find((p) => p.id === r.product_id);
+    return { ...r, product_name: product?.name || '', product_image: product?.image_url || '' };
+  });
   return filter === 'all' ? reviews : reviews.filter((r) => r.status === filter);
 }
 

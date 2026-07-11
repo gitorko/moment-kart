@@ -2,9 +2,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import QRCode from 'qrcode';
 import {
   AUTH_KEY, authAction, fetchProducts, saveProduct, deleteProduct,
-  fetchProfile, saveProfile, placeOrder as apiPlaceOrder,
+  fetchProfile, saveProfile, changePassword, placeOrder as apiPlaceOrder,
   fetchMyOrders, fetchAdminOrders, setOrderStatus as apiSetOrderStatus, resubmitPayment,
-  deleteOrders, importOrders,
+  deleteOrders,
   fetchReviews, fetchFeaturedReviews, submitReview, fetchAdminReviews, updateReview, deleteReview,
   fetchAdminUsers, impersonateUser, sendMarketingEmail,
 } from './api.js';
@@ -55,6 +55,7 @@ function loadCart() {
 }
 
 const rupees = (paise) => `₹${(paise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+const todayStr = () => new Date().toISOString().slice(0, 10);
 
 // ─── PAGINATION ───────────────────────────────────────────────────────────────
 
@@ -503,8 +504,9 @@ function AuthPage({ onLogin }) {
 
 // ─── LANDING ──────────────────────────────────────────────────────────────────
 
-function Landing({ products }) {
-  const featured = products.filter((p) => p.in_stock).slice(0, 3);
+function Landing({ products, loading }) {
+  // Only admin-curated products show here; cap to the top few if many are marked.
+  const featured = products.filter((p) => p.in_stock && p.featured).slice(0, 3);
   const [quotes, setQuotes] = useState([]);
   useEffect(() => {
     fetchFeaturedReviews().then(setQuotes).catch(() => {});
@@ -525,7 +527,12 @@ function Landing({ products }) {
         <Waves />
       </section>
       <Carousel />
-      {featured.length > 0 && (
+      {loading ? (
+        <div className="page">
+          <h2 style={{ textAlign: 'center' }}>Featured Keepsakes</h2>
+          <p className="empty" style={{ textAlign: 'center' }}>Loading keepsakes…</p>
+        </div>
+      ) : featured.length > 0 && (
         <div className="page">
           <h2 style={{ textAlign: 'center' }}>Featured Keepsakes</h2>
           <div className="grid" style={{ marginTop: 20 }}>
@@ -547,7 +554,9 @@ function Landing({ products }) {
                 <blockquote>“{q.text}”</blockquote>
                 <figcaption>
                   — {q.user_name}
-                  {q.product_name && <span> · {q.product_name}</span>}
+                  {q.product_name && (
+                    <span> · {q.product_id ? <a href={`#/product/${q.product_id}`}>{q.product_name}</a> : q.product_name}</span>
+                  )}
                 </figcaption>
               </figure>
             ))}
@@ -561,12 +570,10 @@ function Landing({ products }) {
 // ─── SHOP ─────────────────────────────────────────────────────────────────────
 
 function ProductCard({ product, onAdd }) {
-  const [message, setMessage] = useState('');
   const [added, setAdded] = useState(false);
 
   function add() {
-    onAdd(product, message);
-    setMessage('');
+    onAdd(product, '');
     setAdded(true);
     setTimeout(() => setAdded(false), 1500);
   }
@@ -582,56 +589,51 @@ function ProductCard({ product, onAdd }) {
         <span className="product-thumb-hint">🔍 View details</span>
       </a>
       <div className="body">
-        <a href={`#/product/${product.id}`} className="product-title-link"><strong>{product.name}</strong></a>
-        <span className="desc">{product.description}</span>
-        <span className="price">{rupees(product.price_paise)}</span>
-        {!product.in_stock && <span className="badge badge-oos">Out of stock</span>}
-        {onAdd && product.in_stock && (
-          <>
-            {product.customizable && (
-              <div className="field" style={{ marginBottom: 0 }}>
-                <label>{product.custom_label || 'Your message'}</label>
-                <input
-                  value={message}
-                  onChange={(e) => setMessage(e.target.value.slice(0, 200))}
-                  placeholder="e.g. Happy Birthday Asha!"
-                />
-              </div>
-            )}
-            <button className="btn btn-sm" onClick={add}>
-              {added ? 'Added ✓' : 'Add to Cart'}
-            </button>
-          </>
-        )}
+        <strong>{product.name}</strong>
+        {product.description && <span className="desc">{product.description}</span>}
+        <a href={`#/product/${product.id}`} className="link-btn" style={{ alignSelf: 'flex-start' }}>
+          See details &amp; reviews →
+        </a>
         {(product.tags || []).length > 0 && (
           <span className="product-tags">
             {product.tags.map((t) => <span key={t} className="ptag">{t}</span>)}
           </span>
         )}
-        <a href={`#/product/${product.id}`} className="link-btn">See details &amp; reviews →</a>
+        <span className="price" style={{ marginTop: 'auto' }}>{rupees(product.price_paise)}</span>
+        {!product.in_stock && <span className="badge badge-oos">Out of stock</span>}
+        {onAdd && product.in_stock && (
+          <button className="btn btn-sm" onClick={add}>
+            {added ? 'Added ✓' : 'Add to Cart'}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
-// ─── PRODUCT DETAIL ───────────────────────────────────────────────────────────
+// ─── PRODUCT DETAILS ────────────────────────────────────────────────────────
 
-function ProductDetail({ products, productId, onAdd, session }) {
+function ProductDetails({ id, products, onAdd, session }) {
+  const product = products.find((p) => p.id === id);
+  const [active, setActive] = useState(0);
   const [message, setMessage] = useState('');
   const [added, setAdded] = useState(false);
-  const product = products.find((p) => String(p.id) === String(productId));
 
-  if (products.length === 0) {
-    return <div className="page"><p className="empty">Loading…</p></div>;
-  }
+  useEffect(() => { setActive(0); }, [id]);
+
   if (!product) {
     return (
       <div className="page">
-        <p className="empty">That product could not be found.</p>
-        <a href="#/shop" className="btn btn-ghost btn-sm">← Back to shop</a>
+        <p className="empty">
+          {products.length === 0
+            ? 'Loading…'
+            : <>That product isn't available anymore. <a href="#/shop" style={{ color: 'var(--ocean)', fontWeight: 700 }}>Browse the collection →</a></>}
+        </p>
       </div>
     );
   }
+
+  const images = product.images && product.images.length ? product.images : (product.image_url ? [product.image_url] : []);
 
   function add() {
     onAdd(product, message);
@@ -641,21 +643,36 @@ function ProductDetail({ products, productId, onAdd, session }) {
   }
 
   return (
-    <div className="page" style={{ maxWidth: 880 }}>
-      <a href="#/shop" className="link-btn" style={{ marginBottom: 18, display: 'inline-block' }}>← Back to shop</a>
-      <div className="product-detail">
-        <div className="product-detail-media">
-          {product.image_url ? (
-            <img src={product.image_url} alt={product.name} />
+    <div className="page" style={{ maxWidth: 1140 }}>
+      <a href="#/shop" className="link-btn">← Back to shop</a>
+      <div className="product-details">
+        <div className="pd-gallery">
+          {images.length > 0 ? (
+            <div className="carousel pd-carousel">
+              {images.map((img, i) => (
+                <img key={i} src={img} alt={`${product.name} photo ${i + 1}`} className={i === active ? 'slide active' : 'slide'} />
+              ))}
+              {images.length > 1 && (
+                <>
+                  <button type="button" className="carousel-arrow prev" onClick={() => setActive((active - 1 + images.length) % images.length)} aria-label="Previous photo">‹</button>
+                  <button type="button" className="carousel-arrow next" onClick={() => setActive((active + 1) % images.length)} aria-label="Next photo">›</button>
+                  <div className="carousel-dots">
+                    {images.map((_, i) => (
+                      <button type="button" key={i} className={i === active ? 'dot active' : 'dot'} onClick={() => setActive(i)} aria-label={`Photo ${i + 1}`} />
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
           ) : (
-            <div className="img-placeholder" style={{ height: '100%' }}>{BRAND_INITIALS}</div>
+            <div className="img-placeholder pd-main-img">{BRAND_INITIALS}</div>
           )}
         </div>
-        <div className="product-detail-body">
-          <h1 style={{ margin: 0 }}>{product.name}</h1>
+        <div className="pd-info">
+          <h1>{product.name}</h1>
           <span className="price" style={{ fontSize: 20 }}>{rupees(product.price_paise)}</span>
           {!product.in_stock && <span className="badge badge-oos">Out of stock</span>}
-          {product.description && <p style={{ color: 'var(--slate)', lineHeight: 1.6, whiteSpace: 'pre-line' }}>{product.description}</p>}
+          {product.description && <p className="pd-desc">{product.description}</p>}
           {(product.tags || []).length > 0 && (
             <span className="product-tags">
               {product.tags.map((t) => <span key={t} className="ptag">{t}</span>)}
@@ -664,7 +681,7 @@ function ProductDetail({ products, productId, onAdd, session }) {
           {onAdd && product.in_stock && (
             <>
               {product.customizable && (
-                <div className="field" style={{ marginBottom: 0, marginTop: 10 }}>
+                <div className="field">
                   <label>{product.custom_label || 'Your message'}</label>
                   <input
                     value={message}
@@ -673,7 +690,7 @@ function ProductDetail({ products, productId, onAdd, session }) {
                   />
                 </div>
               )}
-              <button className="btn" style={{ marginTop: 10, alignSelf: 'flex-start' }} onClick={add}>
+              <button className="btn" onClick={add}>
                 {added ? 'Added ✓' : 'Add to Cart'}
               </button>
             </>
@@ -690,7 +707,7 @@ function ProductDetail({ products, productId, onAdd, session }) {
 
 const SHOP_PAGE_SIZE = 12;
 
-function Shop({ products, onAdd, session }) {
+function Shop({ products, onAdd }) {
   const [query, setQuery] = useState('');
   const [tag, setTag] = useState('');
 
@@ -743,7 +760,7 @@ function Shop({ products, onAdd, session }) {
           ) : (
             <div className="grid">
               {pageSlice.map((p) => (
-                <ProductCard key={p.id} product={p} onAdd={onAdd} session={session} />
+                <ProductCard key={p.id} product={p} onAdd={onAdd} />
               ))}
             </div>
           )}
@@ -834,7 +851,7 @@ function AddressForm({ address, setAddress }) {
   const set = (k) => (e) => setAddress({ ...address, [k]: e.target.value });
   return (
     <>
-      <div className="field"><label>Label</label><input value={address.label || ''} onChange={set('label')} placeholder="e.g. Home, Office" /></div>
+      <div className="field"><label>House Name / Door Number</label><input value={address.label || ''} onChange={set('label')} placeholder="e.g. Home, Office" /></div>
       <div className="field"><label>Address line 1 *</label><input value={address.line1} onChange={set('line1')} required /></div>
       <div className="field"><label>Address line 2</label><input value={address.line2} onChange={set('line2')} /></div>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -852,6 +869,7 @@ function Checkout({ cart, setCart }) {
   const [selected, setSelected] = useState(-1); // index into saved, or -1 for a new address
   const [address, setAddress] = useState(EMPTY_ADDRESS);
   const [upiRef, setUpiRef] = useState('');
+  const [transactionDate, setTransactionDate] = useState(todayStr());
   const [error, setError] = useState('');
   const [placing, setPlacing] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -886,6 +904,7 @@ function Checkout({ cart, setCart }) {
       items: cart.map((i) => ({ productId: i.productId, qty: i.qty, message: i.message })),
       address,
       upi_ref: upiRef,
+      transaction_date: transactionDate,
     });
     if (ok) {
       setCart([]);
@@ -986,6 +1005,10 @@ function Checkout({ cart, setCart }) {
               Complete the payment in your UPI app, then paste the transaction/UTR number here.
             </span>
           </div>
+          <div className="field">
+            <label>Payment date *</label>
+            <input type="date" value={transactionDate} onChange={(e) => setTransactionDate(e.target.value)} required />
+          </div>
         </div>
 
         {error && <p className="error">{error}</p>}
@@ -1001,17 +1024,19 @@ function Checkout({ cart, setCart }) {
 
 function MyOrders() {
   const [orders, setOrders] = useState(null);
+  const [products, setProducts] = useState([]);
   const [fixing, setFixing] = useState(null); // { orderId, upi_ref }
   const [fixError, setFixError] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = () => fetchMyOrders().then(setOrders).catch(() => setOrders([]));
   useEffect(() => { load(); }, []);
+  useEffect(() => { fetchProducts().then(setProducts).catch(() => {}); }, []);
 
   async function resubmit(e, order) {
     e.preventDefault();
     setBusy(true);
-    const { ok, data } = await resubmitPayment(order.id, fixing.upi_ref);
+    const { ok, data } = await resubmitPayment(order.id, fixing.upi_ref, fixing.transaction_date);
     setBusy(false);
     if (ok) {
       setFixing(null);
@@ -1035,47 +1060,79 @@ function MyOrders() {
         <>
         {slice.map((o) => (
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <strong>{new Date(o.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
-              <span className={`badge badge-${o.status}`}>{o.status.replace('_', ' ')}</span>
+            <strong>{new Date(o.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+              <dl className="order-details" style={{ flex: '1 1 320px', minWidth: 0 }}>
+                <div className="order-row">
+                  <dt>Order ID:</dt>
+                  <dd className="order-id">{o.order_no ? `#${o.order_no}` : o.id}</dd>
+                </div>
+                {o.items.map((item, i) => {
+                  const product = products.find((p) => p.id === item.productId);
+                  return (
+                    <div key={i} className="order-row">
+                      <dt>Product:</dt>
+                      <dd>
+                        {item.name} × {item.qty}
+                        {product && (
+                          <div><a href={`#/product/${item.productId}`} className="link-btn">View product</a></div>
+                        )}
+                        {item.message && (
+                          <div><span className="order-sublabel">Message:</span> <em>“{item.message}”</em></div>
+                        )}
+                      </dd>
+                    </div>
+                  );
+                })}
+                {o.address && (
+                  <div className="order-row">
+                    <dt>Address:</dt>
+                    <dd>
+                      {[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode]
+                        .filter(Boolean)
+                        .map((line, i) => <div key={i}>{line}</div>)}
+                      {o.address.phone && <div>Phone: {o.address.phone}</div>}
+                    </dd>
+                  </div>
+                )}
+                <div className="order-row">
+                  <dt>Transaction:</dt>
+                  <dd>{o.upi_ref}</dd>
+                </div>
+                {o.paid_at && (
+                  <div className="order-row">
+                    <dt>Payment date:</dt>
+                    <dd>{new Date(o.paid_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</dd>
+                  </div>
+                )}
+                {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
+                  <div className="order-row">
+                    <dt>Shipping:</dt>
+                    <dd>
+                      {o.courier} · Tracking ID: <strong>{o.tracking_id}</strong>
+                      {o.shipped_at && (
+                        <div>Shipped on {new Date(o.shipped_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                      )}
+                    </dd>
+                  </div>
+                )}
+                <div className="order-row">
+                  <dt>Total:</dt>
+                  <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
+                </div>
+              </dl>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 12 }}>
+                <span className={`badge badge-${o.status}`}>{o.status.replace('_', ' ')}</span>
+                {(() => {
+                  const firstProduct = products.find((p) => p.id === o.items[0]?.productId);
+                  return firstProduct?.image_url ? (
+                    <img src={firstProduct.image_url} alt="" className="admin-order-photo" />
+                  ) : (
+                    <div className="admin-order-photo img-placeholder">{BRAND_INITIALS}</div>
+                  );
+                })()}
+              </div>
             </div>
-            <dl className="order-details">
-              <div className="order-row">
-                <dt>Order ID:</dt>
-                <dd className="order-id">{o.order_no ? `#${o.order_no}` : o.id}</dd>
-              </div>
-              {o.items.map((item, i) => (
-                <div key={i} className="order-row">
-                  <dt>Product:</dt>
-                  <dd>
-                    {item.name} × {item.qty}
-                    {item.message && (
-                      <div><span className="order-sublabel">Message:</span> <em>“{item.message}”</em></div>
-                    )}
-                  </dd>
-                </div>
-              ))}
-              {o.address && (
-                <div className="order-row">
-                  <dt>Address:</dt>
-                  <dd>{[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode].filter(Boolean).join(', ')}</dd>
-                </div>
-              )}
-              <div className="order-row">
-                <dt>Transaction:</dt>
-                <dd>{o.upi_ref}</dd>
-              </div>
-              {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
-                <div className="order-row">
-                  <dt>Shipping:</dt>
-                  <dd>{o.courier} · Tracking ID: <strong>{o.tracking_id}</strong></dd>
-                </div>
-              )}
-              <div className="order-row">
-                <dt>Total:</dt>
-                <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
-              </div>
-            </dl>
             {o.status === 'payment_issue' && (
               <div className="payment-issue-box">
                 <p style={{ fontSize: 13, marginBottom: 8 }}>
@@ -1106,12 +1163,21 @@ function MyOrders() {
                         autoFocus
                       />
                     </div>
+                    <div className="field" style={{ marginBottom: 0 }}>
+                      <label>Payment date</label>
+                      <input
+                        type="date"
+                        value={fixing.transaction_date}
+                        onChange={(e) => setFixing({ ...fixing, transaction_date: e.target.value })}
+                        required
+                      />
+                    </div>
                     <button className="btn btn-sm" disabled={busy}>{busy ? 'Submitting…' : 'Resubmit'}</button>
                     <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => { setFixing(null); setFixError(''); }}>Cancel</button>
                     {fixError && <p className="error" style={{ width: '100%', margin: 0 }}>{fixError}</p>}
                   </form>
                 ) : (
-                  <button className="btn btn-sm" onClick={() => { setFixError(''); setFixing({ orderId: o.id, upi_ref: o.upi_ref }); }}>
+                  <button className="btn btn-sm" onClick={() => { setFixError(''); setFixing({ orderId: o.id, upi_ref: o.upi_ref, transaction_date: todayStr() }); }}>
                     Update transaction ID
                   </button>
                 )}
@@ -1135,6 +1201,23 @@ function Profile({ session }) {
   const [status, setStatus] = useState('');
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [pwForm, setPwForm] = useState({ current: '', next: '' });
+  const [pwStatus, setPwStatus] = useState('');
+  const [pwBusy, setPwBusy] = useState(false);
+
+  async function changePw(e) {
+    e.preventDefault();
+    setPwStatus('');
+    setPwBusy(true);
+    const { ok, data } = await changePassword(pwForm.current, pwForm.next);
+    setPwBusy(false);
+    if (ok) {
+      setPwForm({ current: '', next: '' });
+      setPwStatus('saved');
+    } else {
+      setPwStatus(data.error || 'Could not change password');
+    }
+  }
 
   useEffect(() => {
     fetchProfile()
@@ -1198,6 +1281,32 @@ function Profile({ session }) {
             <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save'}</button>
           </form>
 
+          <form onSubmit={changePw} className="card" style={{ marginBottom: 20 }}>
+            <h2 style={{ marginTop: 0 }}>Change password</h2>
+            <div className="field">
+              <label>Current password *</label>
+              <input
+                type="password"
+                value={pwForm.current}
+                onChange={(e) => setPwForm({ ...pwForm, current: e.target.value })}
+                required
+              />
+            </div>
+            <div className="field">
+              <label>New password *</label>
+              <input
+                type="password"
+                value={pwForm.next}
+                onChange={(e) => setPwForm({ ...pwForm, next: e.target.value })}
+                required
+                minLength={6}
+              />
+            </div>
+            <button className="btn" disabled={pwBusy}>{pwBusy ? 'Saving…' : 'Change password'}</button>
+            {pwStatus === 'saved' && <p className="success">Password changed ✓</p>}
+            {pwStatus && pwStatus !== 'saved' && <p className="error">{pwStatus}</p>}
+          </form>
+
           <div className="card">
             <h2 style={{ marginTop: 0 }}>Saved addresses</h2>
             {addresses.length === 0 && !editing && (
@@ -1208,8 +1317,8 @@ function Profile({ session }) {
                 <div style={{ flex: 1 }}>
                   <strong>{a.label || `Address ${i + 1}`}</strong>
                   <div style={{ fontSize: 13, color: 'var(--slate)' }}>
-                    {[a.line1, a.line2, a.city, a.state, a.pincode].filter(Boolean).join(', ')}
-                    {a.phone && ` · ${a.phone}`}
+                    {[a.line1, a.line2, a.city, a.state, a.pincode].filter(Boolean).map((line, li) => <div key={li}>{line}</div>)}
+                    {a.phone && <div>Phone: {a.phone}</div>}
                   </div>
                 </div>
                 <button className="btn btn-sm btn-ghost" onClick={() => setEditing({ idx: i, address: { ...EMPTY_ADDRESS, ...a } })}>Edit</button>
@@ -1242,9 +1351,11 @@ function Profile({ session }) {
 
 // ─── ADMIN: PRODUCTS ──────────────────────────────────────────────────────────
 
+const MAX_PRODUCT_PHOTOS = 3;
+
 const EMPTY_PRODUCT = {
-  name: '', description: '', price: '', image_url: '', tags: '',
-  customizable: false, custom_label: 'Your message', in_stock: true,
+  name: '', description: '', price: '', images: [], tags: '',
+  customizable: false, custom_label: 'Your message', in_stock: true, featured: false,
 };
 
 const parseTags = (raw) =>
@@ -1276,10 +1387,21 @@ function processImage(file) {
   });
 }
 
+function Modal({ onClose, children, maxWidth = 560 }) {
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal-panel card" style={{ maxWidth }} onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function AdminProducts() {
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState(EMPTY_PRODUCT);
   const [editingId, setEditingId] = useState(null);
+  const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -1305,11 +1427,13 @@ function AdminProducts() {
       name: form.name,
       description: form.description,
       price_paise: pricePaise,
-      image_url: form.image_url,
+      images: form.images,
+      image_url: form.images[0] || '',
       tags: parseTags(form.tags),
       customizable: form.customizable,
       custom_label: form.custom_label,
       in_stock: form.in_stock,
+      featured: form.featured,
     };
     setBusy(true);
     const { ok, data } = await saveProduct(body, editingId);
@@ -1317,6 +1441,7 @@ function AdminProducts() {
     if (ok) {
       setForm(EMPTY_PRODUCT);
       setEditingId(null);
+      setFormOpen(false);
       load();
     } else {
       setError(data.error || 'Save failed');
@@ -1325,24 +1450,32 @@ function AdminProducts() {
 
   function startEdit(p) {
     setEditingId(p.id);
+    setFormOpen(true);
     setForm({
       name: p.name,
       description: p.description,
       price: String(p.price_paise / 100),
-      image_url: p.image_url,
+      images: p.images && p.images.length ? p.images : (p.image_url ? [p.image_url] : []),
       tags: (p.tags || []).join(', '),
       customizable: p.customizable,
       custom_label: p.custom_label,
       in_stock: p.in_stock,
+      featured: !!p.featured,
     });
-    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  async function toggleStock(p) {
-    setBusy(true);
-    await saveProduct({ ...p, in_stock: !p.in_stock }, p.id);
-    setBusy(false);
-    load();
+  function openAddForm() {
+    setEditingId(null);
+    setForm(EMPTY_PRODUCT);
+    setError('');
+    setFormOpen(true);
+  }
+
+  function closeForm() {
+    setFormOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_PRODUCT);
+    setError('');
   }
 
   async function remove(p) {
@@ -1355,9 +1488,14 @@ function AdminProducts() {
 
   return (
     <div className="page">
-      <h1>Admin · Products</h1>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12, marginBottom: 24 }}>
+        <h1 style={{ margin: 0 }}>Admin · Products</h1>
+        <button type="button" className="btn" onClick={openAddForm}>+ Add Product</button>
+      </div>
 
-      <form onSubmit={save} className="card" style={{ marginBottom: 28, maxWidth: 560 }}>
+      {formOpen && (
+      <Modal onClose={closeForm}>
+      <form onSubmit={save}>
         <h2 style={{ marginTop: 0 }}>{editingId ? 'Edit product' : 'Add product'}</h2>
         <div className="field"><label>Name *</label><input value={form.name} onChange={set('name')} required placeholder="e.g. Photo frame with custom name" /></div>
         <div className="field"><label>Description</label><textarea value={form.description} onChange={set('description')} rows={2} /></div>
@@ -1368,32 +1506,60 @@ function AdminProducts() {
           <span style={{ fontSize: 12, color: 'var(--slate)' }}>Customers can search and filter the shop by these</span>
         </div>
         <div className="field">
-          <label>Product image</label>
-          {form.image_url && (
-            <img src={form.image_url} alt="preview" style={{ width: 200, height: 150, objectFit: 'cover', borderRadius: 10, border: '1.5px solid #bae6fd' }} />
+          <label>Product photos ({form.images.length}/{MAX_PRODUCT_PHOTOS})</label>
+          {form.images.length > 0 && (
+            <div className="photo-picker-grid">
+              {form.images.map((img, i) => (
+                <div key={i} className={i === 0 ? 'photo-thumb is-cover' : 'photo-thumb'}>
+                  <img src={img} alt={`Photo ${i + 1}`} />
+                  {i === 0 ? (
+                    <span className="photo-cover-badge">Cover</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      onClick={() => setForm((f) => {
+                        const images = [...f.images];
+                        const [chosen] = images.splice(i, 1);
+                        images.unshift(chosen);
+                        return { ...f, images };
+                      })}
+                    >
+                      Make cover
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn btn-sm btn-ghost"
+                    onClick={() => setForm((f) => ({ ...f, images: f.images.filter((_, idx) => idx !== i) }))}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
           )}
-          <input
-            type="file"
-            accept="image/*"
-            onChange={async (e) => {
-              const file = e.target.files?.[0];
-              if (!file) return;
-              try {
-                setForm((f) => ({ ...f, image_url: '' }));
-                const dataUri = await processImage(file);
-                setForm((f) => ({ ...f, image_url: dataUri }));
-              } catch {
-                setError('Could not read that image — try a different file');
-              }
-              e.target.value = '';
-            }}
-          />
-          {form.image_url && (
-            <button type="button" className="btn btn-sm btn-ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setForm((f) => ({ ...f, image_url: '' }))}>
-              Remove image
-            </button>
+          {form.images.length < MAX_PRODUCT_PHOTOS && (
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={async (e) => {
+                const files = Array.from(e.target.files || []).slice(0, MAX_PRODUCT_PHOTOS - form.images.length);
+                e.target.value = '';
+                if (files.length === 0) return;
+                try {
+                  const dataUris = await Promise.all(files.map(processImage));
+                  setForm((f) => ({ ...f, images: [...f.images, ...dataUris].slice(0, MAX_PRODUCT_PHOTOS) }));
+                } catch {
+                  setError('Could not read one of those images — try different files');
+                }
+              }}
+            />
           )}
-          <span style={{ fontSize: 12, color: 'var(--slate)' }}>Cropped to 4:3 and compressed automatically</span>
+          <span style={{ fontSize: 12, color: 'var(--slate)' }}>
+            Up to {MAX_PRODUCT_PHOTOS} photos, cropped to 4:3 and compressed automatically. The first photo is the cover shown on product cards — use "Make cover" on any other photo to swap it.
+          </span>
         </div>
         <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           <input type="checkbox" checked={form.customizable} onChange={set('customizable')} id="customizable" style={{ width: 'auto' }} />
@@ -1406,18 +1572,22 @@ function AdminProducts() {
           <input type="checkbox" checked={form.in_stock} onChange={set('in_stock')} id="in_stock" style={{ width: 'auto' }} />
           <label htmlFor="in_stock" style={{ cursor: 'pointer' }}>In stock</label>
         </div>
+        <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <input type="checkbox" checked={form.featured} onChange={set('featured')} id="featured" style={{ width: 'auto' }} />
+          <label htmlFor="featured" style={{ cursor: 'pointer' }}>Show in Featured Keepsakes on home page</label>
+        </div>
         {error && <p className="error">{error}</p>}
         <div style={{ display: 'flex', gap: 10 }}>
           <button className="btn" disabled={busy}>
             {busy ? 'Saving…' : editingId ? 'Update product' : 'Add product'}
           </button>
-          {editingId && (
-            <button type="button" className="btn btn-ghost" disabled={busy} onClick={() => { setEditingId(null); setForm(EMPTY_PRODUCT); }}>
-              Cancel
-            </button>
-          )}
+          <button type="button" className="btn btn-ghost" disabled={busy} onClick={closeForm}>
+            Cancel
+          </button>
         </div>
       </form>
+      </Modal>
+      )}
 
       <div className="table-wrap card" style={{ padding: 0 }}>
         <table>
@@ -1437,13 +1607,11 @@ function AdminProducts() {
                 <td>{(p.tags || []).join(', ') || '—'}</td>
                 <td>{p.customizable ? `✓ (${p.custom_label})` : '—'}</td>
                 <td>
-                  {p.in_stock ? <span className="badge badge-fulfilled">in stock</span> : <span className="badge badge-oos">out of stock</span>}
+                  <div>{p.in_stock ? <span className="badge badge-fulfilled">in stock</span> : <span className="badge badge-oos">out of stock</span>}</div>
+                  {p.featured && <div style={{ marginTop: 4 }}><span className="badge badge-fulfilled">★ featured</span></div>}
                 </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => startEdit(p)}>Edit</button>{' '}
-                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => toggleStock(p)}>
-                    {p.in_stock ? 'Mark out of stock' : 'Mark in stock'}
-                  </button>{' '}
                   <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => remove(p)}>Delete</button>
                 </td>
               </tr>
@@ -1461,12 +1629,12 @@ function AdminProducts() {
 
 // ─── ADMIN: ORDERS ────────────────────────────────────────────────────────────
 
-// CSV export/import. The human-readable columns are for spreadsheets; the
-// *_json columns carry the exact data so an exported file can be re-imported
-// losslessly (e.g. after deleting old orders to free database space).
+// CSV export. The human-readable columns are for spreadsheets; the
+// *_json columns carry the exact data as a lossless backup (e.g. before
+// deleting old orders to free database space).
 const ORDER_CSV_COLUMNS = [
   'id', 'order_no', 'created_at', 'status', 'user_name', 'user_email', 'items_summary',
-  'total_rupees', 'upi_ref', 'courier', 'tracking_id', 'address_json', 'items_json',
+  'total_rupees', 'upi_ref', 'paid_at', 'courier', 'tracking_id', 'shipped_at', 'address_json', 'items_json',
 ];
 
 function csvEscape(value) {
@@ -1480,70 +1648,11 @@ function ordersToCsv(orders) {
     lines.push([
       o.id, o.order_no ?? '', o.created_at, o.status, o.user_name, o.user_email,
       o.items.map((i) => `${i.name} x${i.qty}${i.message ? ` (${i.message})` : ''}`).join('; '),
-      (o.total_paise / 100).toFixed(2), o.upi_ref, o.courier || '', o.tracking_id || '',
+      (o.total_paise / 100).toFixed(2), o.upi_ref, o.paid_at || '', o.courier || '', o.tracking_id || '', o.shipped_at || '',
       JSON.stringify(o.address), JSON.stringify(o.items),
     ].map(csvEscape).join(','));
   }
   return lines.join('\r\n');
-}
-
-function parseCsv(text) {
-  const rows = [];
-  let row = [];
-  let field = '';
-  let inQuotes = false;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (inQuotes) {
-      if (c === '"') {
-        if (text[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else field += c;
-    } else if (c === '"') {
-      inQuotes = true;
-    } else if (c === ',') {
-      row.push(field); field = '';
-    } else if (c === '\n' || c === '\r') {
-      if (c === '\r' && text[i + 1] === '\n') i++;
-      row.push(field); field = '';
-      rows.push(row); row = [];
-    } else {
-      field += c;
-    }
-  }
-  if (field !== '' || row.length > 0) { row.push(field); rows.push(row); }
-  return rows.filter((r) => r.length > 1 || (r[0] || '').trim() !== '');
-}
-
-function csvToOrders(text) {
-  const rows = parseCsv(text);
-  if (rows.length < 2) return null;
-  const header = rows[0].map((h) => h.trim());
-  const col = Object.fromEntries(header.map((h, i) => [h, i]));
-  if (col.id === undefined || col.items_json === undefined || col.address_json === undefined) return null;
-  const get = (r, key) => (col[key] === undefined ? '' : r[col[key]] ?? '');
-  const orders = [];
-  for (const r of rows.slice(1)) {
-    try {
-      orders.push({
-        id: get(r, 'id'),
-        order_no: get(r, 'order_no'),
-        created_at: get(r, 'created_at'),
-        status: get(r, 'status') || 'pending',
-        user_name: get(r, 'user_name'),
-        user_email: get(r, 'user_email'),
-        total_paise: Math.round(parseFloat(get(r, 'total_rupees') || '0') * 100),
-        upi_ref: get(r, 'upi_ref'),
-        courier: get(r, 'courier') || null,
-        tracking_id: get(r, 'tracking_id') || null,
-        address: JSON.parse(get(r, 'address_json')),
-        items: JSON.parse(get(r, 'items_json')),
-      });
-    } catch {
-      // skip malformed row
-    }
-  }
-  return orders;
 }
 
 function downloadFile(name, contents, type) {
@@ -1559,6 +1668,7 @@ function downloadFile(name, contents, type) {
 
 function AdminOrders() {
   const [orders, setOrders] = useState([]);
+  const [products, setProducts] = useState([]);
   const [filter, setFilter] = useState('pending');
   const [selected, setSelected] = useState(() => new Set());
   const [notice, setNotice] = useState('');
@@ -1570,6 +1680,7 @@ function AdminOrders() {
     });
   }, [filter]);
   useEffect(load, [load]);
+  useEffect(() => { fetchProducts().then(setProducts).catch(() => {}); }, []);
 
   const { page, setPage, pageCount, slice } = usePager(orders, 10);
   useEffect(() => { setPage(0); }, [filter]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1607,34 +1718,6 @@ function AdminOrders() {
     );
   }
 
-  function importCsv() {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.csv,text/csv';
-    input.onchange = (e) => {
-      const file = e.target.files?.[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = async (ev) => {
-        const rows = csvToOrders(String(ev.target?.result || ''));
-        if (!rows || rows.length === 0) {
-          setNotice('Could not read that CSV — use a file exported from this page.');
-          return;
-        }
-        if (!window.confirm(`Import ${rows.length} order(s)? Existing orders with the same id are overwritten.`)) return;
-        setBusy(true);
-        const { ok, data } = await importOrders(rows);
-        setBusy(false);
-        setNotice(ok
-          ? `Imported ${data.imported} order(s)${data.skipped ? `, skipped ${data.skipped} (unknown customer or malformed)` : ''}.`
-          : data.error || 'Import failed');
-        load();
-      };
-      reader.readAsText(file);
-    };
-    input.click();
-  }
-
   async function removeOrders(ids) {
     if (ids.length === 0) return;
     const label = ids.length === 1 ? 'this fulfilled order' : `${ids.length} fulfilled orders`;
@@ -1666,9 +1749,6 @@ function AdminOrders() {
         <button className="btn btn-sm btn-ghost" disabled={busy || orders.length === 0} onClick={exportCsv}>
           Export CSV
         </button>
-        <button className="btn btn-sm btn-ghost" disabled={busy} onClick={importCsv}>
-          Import CSV
-        </button>
         {deletable.length > 0 && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--slate)', cursor: 'pointer', marginLeft: 6 }}>
             <input
@@ -1692,70 +1772,100 @@ function AdminOrders() {
         <>
         {slice.map((o) => (
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-                {o.status === 'fulfilled' && (
-                  <input
-                    type="checkbox"
-                    checked={selected.has(o.id)}
-                    onChange={() => toggleSelected(o.id)}
-                    style={{ marginTop: 4 }}
-                    aria-label="Select order for deletion"
-                  />
-                )}
-                <div>
-                  <strong>{o.user_name}</strong>{' '}
-                  <span style={{ color: 'var(--slate)', fontSize: 13 }}>({o.user_email})</span>
-                  <div style={{ fontSize: 13, color: 'var(--slate)' }}>
-                    {new Date(o.created_at).toLocaleString('en-IN')}
-                  </div>
-                </div>
+            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+              {o.status === 'fulfilled' && (
+                <input
+                  type="checkbox"
+                  checked={selected.has(o.id)}
+                  onChange={() => toggleSelected(o.id)}
+                  style={{ marginTop: 4 }}
+                  aria-label="Select order for deletion"
+                />
+              )}
+              <div>
+                <strong>{o.user_name}</strong>{' '}
+                <span style={{ color: 'var(--slate)', fontSize: 13 }}>({o.user_email})</span>
               </div>
-              <span className={`badge badge-${o.status}`}>{o.status.replace('_', ' ')}</span>
             </div>
-            <dl className="order-details">
-              <div className="order-row">
-                <dt>Order ID:</dt>
-                <dd className="order-id">{o.order_no ? `#${o.order_no}` : o.id}</dd>
-              </div>
-              {o.items.map((item, i) => (
-                <div key={i} className="order-row">
-                  <dt>Product:</dt>
+            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+              <dl className="order-details" style={{ flex: '1 1 320px', minWidth: 0 }}>
+                <div className="order-row">
+                  <dt>Order ID:</dt>
+                  <dd className="order-id">{o.order_no ? `#${o.order_no}` : o.id}</dd>
+                </div>
+                <div className="order-row">
+                  <dt>Order date:</dt>
+                  <dd>{new Date(o.created_at).toLocaleString('en-IN')}</dd>
+                </div>
+                {o.items.map((item, i) => {
+                  const product = products.find((p) => p.id === item.productId);
+                  return (
+                    <div key={i} className="order-row">
+                      <dt>Product:</dt>
+                      <dd>
+                        {item.name} × {item.qty}
+                        {product && (
+                          <div><a href={`#/product/${item.productId}`} className="link-btn">View product</a></div>
+                        )}
+                        {item.message && (
+                          <div><span className="order-sublabel">Message:</span> <em style={{ color: 'var(--ocean)' }}>“{item.message}”</em></div>
+                        )}
+                      </dd>
+                    </div>
+                  );
+                })}
+                <div className="order-row">
+                  <dt>Address:</dt>
                   <dd>
-                    {item.name} × {item.qty}
-                    {item.message && (
-                      <div><span className="order-sublabel">Message:</span> <em style={{ color: 'var(--ocean)' }}>“{item.message}”</em></div>
-                    )}
+                    {[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode]
+                      .filter(Boolean)
+                      .map((line, i) => <div key={i}>{line}</div>)}
+                    {o.address.phone && <div>Phone: {o.address.phone}</div>}
                   </dd>
                 </div>
-              ))}
-              <div className="order-row">
-                <dt>Address:</dt>
-                <dd>
-                  {[o.address.line1, o.address.line2, o.address.city, o.address.state, o.address.pincode].filter(Boolean).join(', ')}
-                  {o.address.phone && ` · Phone: ${o.address.phone}`}
-                </dd>
-              </div>
-              <div className="order-row">
-                <dt>Transaction:</dt>
-                <dd><strong>{o.upi_ref}</strong></dd>
-              </div>
-              {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
                 <div className="order-row">
-                  <dt>Shipping:</dt>
-                  <dd>{o.courier} · Tracking ID: <strong>{o.tracking_id}</strong></dd>
+                  <dt>Transaction:</dt>
+                  <dd><strong>{o.upi_ref}</strong></dd>
                 </div>
-              )}
-              <div className="order-row">
-                <dt>Total:</dt>
-                <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
+                {o.paid_at && (
+                  <div className="order-row">
+                    <dt>Payment date:</dt>
+                    <dd>{new Date(o.paid_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</dd>
+                  </div>
+                )}
+                {(o.status === 'shipped' || o.status === 'fulfilled') && o.courier && (
+                  <div className="order-row">
+                    <dt>Shipping:</dt>
+                    <dd>
+                      {o.courier} · Tracking ID: <strong>{o.tracking_id}</strong>
+                      {o.shipped_at && (
+                        <div>Shipped on {new Date(o.shipped_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
+                      )}
+                    </dd>
+                  </div>
+                )}
+                <div className="order-row">
+                  <dt>Total:</dt>
+                  <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
+                </div>
+              </dl>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 12 }}>
+                <span className={`badge badge-${o.status}`}>{o.status.replace('_', ' ')}</span>
+                {(() => {
+                  const firstProduct = products.find((p) => p.id === o.items[0]?.productId);
+                  return firstProduct?.image_url ? (
+                    <img src={firstProduct.image_url} alt="" className="admin-order-photo" />
+                  ) : (
+                    <div className="admin-order-photo img-placeholder">{BRAND_INITIALS}</div>
+                  );
+                })()}
               </div>
-            </dl>
+            </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
                 {o.status === 'pending' && (
                   <>
-                    <button className="btn btn-sm" onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '' }); }}>
+                    <button className="btn btn-sm" onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '', shipped_date: todayStr() }); }}>
                       Mark shipped
                     </button>
                     <button className="btn btn-sm btn-danger" onClick={() => setStatus(o, 'payment_issue')}>
@@ -1774,7 +1884,7 @@ function AdminOrders() {
                 )}
                 {o.status === 'fulfilled' && (
                   <>
-                    <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'shipped', { courier: o.courier || 'Bluedart', tracking_id: o.tracking_id || '-' })}>
+                    <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'shipped', { courier: o.courier || 'Bluedart', tracking_id: o.tracking_id || '-', shipped_date: o.shipped_at || todayStr() })}>
                       Back to shipped
                     </button>
                     <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => removeOrders([o.id])}>
@@ -1789,7 +1899,7 @@ function AdminOrders() {
                 className="ship-form"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  setStatus(o, 'shipped', { courier: shipping.courier, tracking_id: shipping.tracking_id });
+                  setStatus(o, 'shipped', { courier: shipping.courier, tracking_id: shipping.tracking_id, shipped_date: shipping.shipped_date });
                 }}
               >
                 <div className="field" style={{ marginBottom: 0, flex: 1 }}>
@@ -1799,6 +1909,10 @@ function AdminOrders() {
                 <div className="field" style={{ marginBottom: 0, flex: 1 }}>
                   <label>Tracking ID</label>
                   <input value={shipping.tracking_id} onChange={(e) => setShipping({ ...shipping, tracking_id: e.target.value })} required placeholder="e.g. 69847712345" />
+                </div>
+                <div className="field" style={{ marginBottom: 0, flex: 1 }}>
+                  <label>Shipped date</label>
+                  <input type="date" value={shipping.shipped_date} onChange={(e) => setShipping({ ...shipping, shipped_date: e.target.value })} required />
                 </div>
                 <button className="btn btn-sm" disabled={busy}>{busy ? 'Shipping…' : 'Ship'}</button>
                 <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => { setShipping(null); setShipError(''); }}>Cancel</button>
@@ -1862,11 +1976,22 @@ function AdminReviews() {
         {slice.map((r) => (
           <div key={r.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-              <div>
-                <strong>{r.user_name}</strong>{' '}
-                <span style={{ color: 'var(--slate)', fontSize: 13 }}>on {r.product_name}</span>
-                <div style={{ fontSize: 13, color: 'var(--slate)' }}>
-                  {new Date(r.created_at).toLocaleString('en-IN')}
+              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                {r.product_id && (
+                  r.product_image ? (
+                    <img className="order-item-thumb" src={r.product_image} alt={r.product_name} />
+                  ) : (
+                    <div className="order-item-thumb img-placeholder">{BRAND_INITIALS}</div>
+                  )
+                )}
+                <div>
+                  <strong>{r.user_name}</strong>{' '}
+                  <span style={{ color: 'var(--slate)', fontSize: 13 }}>
+                    on {r.product_id ? <a href={`#/product/${r.product_id}`}>{r.product_name}</a> : r.product_name}
+                  </span>
+                  <div style={{ fontSize: 13, color: 'var(--slate)' }}>
+                    Review date: {new Date(r.created_at).toLocaleString('en-IN')}
+                  </div>
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -2245,6 +2370,7 @@ export default function App() {
   const [session, setSession] = useState(getSession);
   const [cart, setCartState] = useState(loadCart);
   const [products, setProducts] = useState([]);
+  const [productsLoaded, setProductsLoaded] = useState(false);
 
   useEffect(() => {
     document.title = `${APP_NAME} — Souvenirs that flow with your memories`;
@@ -2252,7 +2378,7 @@ export default function App() {
 
   // Reload the catalog on navigation so admin edits show up in the shop right away.
   useEffect(() => {
-    fetchProducts().then(setProducts).catch(() => {});
+    fetchProducts().then(setProducts).catch(() => {}).finally(() => setProductsLoaded(true));
   }, [route]);
 
   const setCart = (next) => {
@@ -2294,12 +2420,12 @@ export default function App() {
   } else if (route === '/shop') {
     // The admin manages the shop but doesn't buy from it — no cart. Use
     // "Impersonate" on Admin · Users to act on a customer's behalf.
-    content = <Shop products={products} onAdd={session?.admin ? undefined : addToCart} session={session} />;
+    content = <Shop products={products} onAdd={session?.admin ? undefined : addToCart} />;
   } else if (route.startsWith('/product/')) {
     content = (
-      <ProductDetail
+      <ProductDetails
+        id={route.slice('/product/'.length)}
         products={products}
-        productId={route.slice('/product/'.length)}
         onAdd={session?.admin ? undefined : addToCart}
         session={session}
       />
@@ -2323,7 +2449,7 @@ export default function App() {
   } else if (route === '/admin/marketing' && session?.admin) {
     content = <AdminMarketing />;
   } else {
-    content = <Landing products={products} />;
+    content = <Landing products={products} loading={!productsLoaded} />;
   }
 
   const link = (path, label) => (
@@ -2332,6 +2458,12 @@ export default function App() {
 
   return (
     <>
+      {impersonating && (
+        <div className="impersonation-bar">
+          👁 Viewing as <strong>{session.name} ({session.email})</strong>
+          <button type="button" onClick={stopImpersonation}>Stop Impersonation</button>
+        </div>
+      )}
       <nav className="nav">
         <a href="#/" className="brand">{BRAND_FIRST}{BRAND_REST && <> <em>{BRAND_REST}</em></>}</a>
         {link('/shop', 'Shop')}
@@ -2353,12 +2485,6 @@ export default function App() {
           link('/auth', 'Login')
         )}
       </nav>
-      {impersonating && (
-        <div className="impersonation-bar">
-          👁 Viewing as <strong>{session.name} ({session.email})</strong>
-          <button type="button" onClick={stopImpersonation}>Return to admin</button>
-        </div>
-      )}
       {content}
     </>
   );
