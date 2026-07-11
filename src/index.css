@@ -400,6 +400,17 @@ th {
 
 .empty { text-align: center; color: var(--slate); padding: 70px 20px; font-size: 16px; font-family: var(--serif); font-style: italic; }
 
+/* ─── Spinner ── */
+.spinner-wrap { display: flex; justify-content: center; align-items: center; padding: 70px 20px; }
+.spinner-wrap.spinner-inline { padding: 0; }
+.spinner {
+  width: 34px; height: 34px; border-radius: 50%;
+  border: 3px solid var(--foam); border-top-color: var(--ocean);
+  animation: spin 0.8s linear infinite;
+}
+.spinner-sm { width: 16px; height: 16px; border-width: 2px; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
 /* ─── Carousel ── */
 .carousel {
   position: relative; margin-top: 24px;

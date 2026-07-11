@@ -84,6 +84,14 @@ function Pager({ page, pageCount, setPage, label }) {
   );
 }
 
+function Spinner({ inline, small }) {
+  return (
+    <div className={inline ? 'spinner-wrap spinner-inline' : 'spinner-wrap'}>
+      <div className={small ? 'spinner spinner-sm' : 'spinner'} role="status" aria-label="Loading" />
+    </div>
+  );
+}
+
 // ─── ROUTING ──────────────────────────────────────────────────────────────────
 
 function useHashRoute() {
@@ -193,7 +201,7 @@ function ProductReviews({ productId, session }) {
   return (
     <div className="reviews-panel">
       {reviews === null ? (
-        <p style={{ fontSize: 13, color: 'var(--slate)' }}>Loading reviews…</p>
+        <Spinner inline small />
       ) : reviews.length === 0 ? (
         <p style={{ fontSize: 13, color: 'var(--slate)', fontStyle: 'italic' }}>No reviews yet.</p>
       ) : (
@@ -530,7 +538,7 @@ function Landing({ products, loading }) {
       {loading ? (
         <div className="page">
           <h2 style={{ textAlign: 'center' }}>Featured Keepsakes</h2>
-          <p className="empty" style={{ textAlign: 'center' }}>Loading keepsakes…</p>
+          <Spinner />
         </div>
       ) : featured.length > 0 && (
         <div className="page">
@@ -624,11 +632,11 @@ function ProductDetails({ id, products, onAdd, session }) {
   if (!product) {
     return (
       <div className="page">
-        <p className="empty">
-          {products.length === 0
-            ? 'Loading…'
-            : <>That product isn't available anymore. <a href="#/shop" style={{ color: 'var(--ocean)', fontWeight: 700 }}>Browse the collection →</a></>}
-        </p>
+        {products.length === 0 ? (
+          <Spinner />
+        ) : (
+          <p className="empty">That product isn't available anymore. <a href="#/shop" style={{ color: 'var(--ocean)', fontWeight: 700 }}>Browse the collection →</a></p>
+        )}
       </div>
     );
   }
@@ -707,7 +715,7 @@ function ProductDetails({ id, products, onAdd, session }) {
 
 const SHOP_PAGE_SIZE = 12;
 
-function Shop({ products, onAdd }) {
+function Shop({ products, loading, onAdd }) {
   const [query, setQuery] = useState('');
   const [tag, setTag] = useState('');
 
@@ -728,8 +736,10 @@ function Shop({ products, onAdd }) {
   return (
     <div className="page">
       <h1>The Collection</h1>
-      {products.length === 0 ? (
-        <p className="empty">The tide hasn't brought any products yet — check back soon!</p>
+      {loading ? (
+        <Spinner />
+      ) : products.length === 0 ? (
+        <p className="empty">No products yet — check back soon.</p>
       ) : (
         <>
           <div className="shop-toolbar">
@@ -788,7 +798,7 @@ function Cart({ cart, setCart, session }) {
       <div className="page">
         <h1>Your Cart</h1>
         <p className="empty">
-          Your cart is as empty as a calm sea. <a href="#/shop" style={{ color: 'var(--ocean)', fontWeight: 600 }}>Browse the collection →</a>
+          Your cart is empty. <a href="#/shop" style={{ color: 'var(--ocean)', fontWeight: 600 }}>Browse the collection →</a>
         </p>
       </div>
     );
@@ -947,7 +957,7 @@ function Checkout({ cart, setCart }) {
         <div className="card" style={{ marginBottom: 20 }}>
           <h2 style={{ marginTop: 0 }}>Shipping address</h2>
           {!loaded ? (
-            <p>Loading saved addresses…</p>
+            <Spinner inline small />
           ) : (
             <>
               {saved.length > 0 && (
@@ -1049,13 +1059,13 @@ function MyOrders() {
 
   const { page, setPage, pageCount, slice } = usePager(orders || [], 5);
 
-  if (!orders) return <div className="page"><p className="empty">Loading your orders…</p></div>;
+  if (!orders) return <div className="page"><Spinner /></div>;
 
   return (
     <div className="page" style={{ maxWidth: 720 }}>
       <h1>My Orders</h1>
       {orders.length === 0 ? (
-        <p className="empty">No orders yet — your memories await!</p>
+        <p className="empty">No orders yet.</p>
       ) : (
         <>
         {slice.map((o) => (
@@ -1266,7 +1276,7 @@ function Profile({ session }) {
     <div className="page" style={{ maxWidth: 560 }}>
       <h1>My Profile</h1>
       {!loaded ? (
-        <p className="empty">Loading…</p>
+        <Spinner />
       ) : (
         <>
           <form onSubmit={saveName} className="card" style={{ marginBottom: 20 }}>
@@ -1629,17 +1639,21 @@ function AdminProducts() {
 
 // ─── ADMIN: ORDERS ────────────────────────────────────────────────────────────
 
-// CSV export. The human-readable columns are for spreadsheets; the
-// *_json columns carry the exact data as a lossless backup (e.g. before
-// deleting old orders to free database space).
 const ORDER_CSV_COLUMNS = [
   'id', 'order_no', 'created_at', 'status', 'user_name', 'user_email', 'items_summary',
-  'total_rupees', 'upi_ref', 'paid_at', 'courier', 'tracking_id', 'shipped_at', 'address_json', 'items_json',
+  'total_rupees', 'upi_ref', 'paid_at', 'courier', 'tracking_id', 'shipped_at', 'address',
 ];
 
 function csvEscape(value) {
   const s = value == null ? '' : String(value);
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function addressToLines(a) {
+  if (!a) return '';
+  return [a.line1, a.line2, a.city, a.state, a.pincode, a.phone && `Phone: ${a.phone}`]
+    .filter(Boolean)
+    .join('\n');
 }
 
 function ordersToCsv(orders) {
@@ -1649,7 +1663,7 @@ function ordersToCsv(orders) {
       o.id, o.order_no ?? '', o.created_at, o.status, o.user_name, o.user_email,
       o.items.map((i) => `${i.name} x${i.qty}${i.message ? ` (${i.message})` : ''}`).join('; '),
       (o.total_paise / 100).toFixed(2), o.upi_ref, o.paid_at || '', o.courier || '', o.tracking_id || '', o.shipped_at || '',
-      JSON.stringify(o.address), JSON.stringify(o.items),
+      addressToLines(o.address),
     ].map(csvEscape).join(','));
   }
   return lines.join('\r\n');
@@ -1664,6 +1678,29 @@ function downloadFile(name, contents, type) {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function printAddress(o) {
+  const win = window.open('', '_blank', 'width=420,height=560');
+  if (!win) return;
+  const lines = addressToLines(o.address).split('\n').filter(Boolean);
+  win.document.write(`<!doctype html><html><head><title>Address — ${escapeHtml(o.order_no ? `#${o.order_no}` : o.id)}</title>
+<style>
+  body { font-family: sans-serif; padding: 32px; font-size: 16px; line-height: 1.5; color: #111; }
+  .order-ref { font-size: 12px; color: #666; margin-bottom: 18px; }
+  .name { font-weight: 700; font-size: 18px; margin-bottom: 8px; }
+</style></head><body>
+<div class="order-ref">Order ${escapeHtml(o.order_no ? `#${o.order_no}` : o.id)}</div>
+<div class="name">${escapeHtml(o.user_name)}</div>
+${lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('\n')}
+</body></html>`);
+  win.document.close();
+  win.focus();
+  setTimeout(() => win.print(), 250);
 }
 
 function AdminOrders() {
@@ -1863,28 +1900,29 @@ function AdminOrders() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" className="btn btn-sm btn-ghost" onClick={() => printAddress(o)}>Print Address</button>
                 {o.status === 'pending' && (
                   <>
-                    <button className="btn btn-sm" onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '', shipped_date: todayStr() }); }}>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '', shipped_date: todayStr() }); }}>
                       Mark shipped
                     </button>
-                    <button className="btn btn-sm btn-danger" onClick={() => setStatus(o, 'payment_issue')}>
-                      Payment not received
+                    <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => setStatus(o, 'payment_issue')}>
+                      {busy ? 'Updating…' : 'Payment not received'}
                     </button>
                   </>
                 )}
                 {o.status === 'payment_issue' && (
-                  <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'pending')}>Back to pending</button>
+                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
                 )}
                 {o.status === 'shipped' && (
                   <>
-                    <button className="btn btn-sm" onClick={() => setStatus(o, 'fulfilled')}>Mark fulfilled ✓</button>
-                    <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'pending')}>Back to pending</button>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => setStatus(o, 'fulfilled')}>{busy ? 'Updating…' : 'Mark fulfilled ✓'}</button>
+                    <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
                   </>
                 )}
                 {o.status === 'fulfilled' && (
                   <>
-                    <button className="btn btn-sm btn-ghost" onClick={() => setStatus(o, 'shipped', { courier: o.courier || 'Bluedart', tracking_id: o.tracking_id || '-', shipped_date: o.shipped_at || todayStr() })}>
+                    <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'shipped', { courier: o.courier || 'Bluedart', tracking_id: o.tracking_id || '-', shipped_date: o.shipped_at || todayStr() })}>
                       Back to shipped
                     </button>
                     <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => removeOrders([o.id])}>
@@ -2067,6 +2105,7 @@ function AdminUsers({ session }) {
   const [users, setUsers] = useState(null);
   const [error, setError] = useState('');
   const [sort, setSort] = useState({ key: 'created_at', dir: 'desc' });
+  const [impersonating, setImpersonating] = useState(null); // email currently being impersonated
 
   useEffect(() => {
     fetchAdminUsers().then(setUsers).catch(() => setUsers([]));
@@ -2087,8 +2126,10 @@ function AdminUsers({ session }) {
 
   async function impersonate(u) {
     setError('');
+    setImpersonating(u.email);
     if (!(await startImpersonation(u.email))) {
       setError(`Could not impersonate ${u.email}`);
+      setImpersonating(null);
     }
   }
 
@@ -2097,7 +2138,7 @@ function AdminUsers({ session }) {
       <h1>Admin · Users</h1>
       {error && <p className="error">{error}</p>}
       {users === null ? (
-        <p className="empty">Loading users…</p>
+        <Spinner />
       ) : users.length === 0 ? (
         <p className="empty">No registered users yet.</p>
       ) : (
@@ -2128,7 +2169,9 @@ function AdminUsers({ session }) {
                   <td>{u.spent_paise > 0 ? rupees(u.spent_paise) : '—'}</td>
                   <td>
                     {u.email !== session?.email && (
-                      <button className="btn btn-sm btn-ghost" onClick={() => impersonate(u)}>Impersonate</button>
+                      <button className="btn btn-sm btn-ghost" disabled={!!impersonating} onClick={() => impersonate(u)}>
+                        {impersonating === u.email ? 'Switching…' : 'Impersonate'}
+                      </button>
                     )}
                   </td>
                 </tr>
@@ -2420,7 +2463,7 @@ export default function App() {
   } else if (route === '/shop') {
     // The admin manages the shop but doesn't buy from it — no cart. Use
     // "Impersonate" on Admin · Users to act on a customer's behalf.
-    content = <Shop products={products} onAdd={session?.admin ? undefined : addToCart} />;
+    content = <Shop products={products} loading={!productsLoaded} onAdd={session?.admin ? undefined : addToCart} />;
   } else if (route.startsWith('/product/')) {
     content = (
       <ProductDetails
