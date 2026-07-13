@@ -192,7 +192,7 @@ export async function saveProduct(product, editingId) {
     const idx = products.findIndex((p) => p.id === editingId);
     if (idx >= 0) products[idx] = { ...products[idx], ...product, id: editingId };
   } else {
-    products.unshift({ ...product, id: uid() });
+    products.push({ ...product, id: uid() }); // new products default to the bottom of the shop order
   }
   write(PRODUCTS_KEY, products);
   return { ok: true, data: {} };
@@ -201,6 +201,17 @@ export async function saveProduct(product, editingId) {
 export async function deleteProduct(id) {
   if (!IS_DEV) return toResult(authFetch(`/api/products?id=${id}`, { method: 'DELETE' }));
   write(PRODUCTS_KEY, read(PRODUCTS_KEY, []).filter((p) => p.id !== id));
+  return { ok: true, data: {} };
+}
+
+// Admin: re-rank the shop grid — ids is the full product list in the desired order.
+export async function reorderProducts(ids) {
+  if (!IS_DEV) return toResult(authFetch('/api/products', { method: 'PATCH', body: JSON.stringify({ order: ids }) }));
+  const products = read(PRODUCTS_KEY, []);
+  const byId = new Map(products.map((p) => [p.id, p]));
+  const reordered = ids.map((id) => byId.get(id)).filter(Boolean);
+  const missing = products.filter((p) => !ids.includes(p.id));
+  write(PRODUCTS_KEY, [...reordered, ...missing]);
   return { ok: true, data: {} };
 }
 
@@ -267,9 +278,19 @@ export async function placeOrder({ items, address, upi_ref, transaction_date }) 
     const product = products.find((p) => p.id === item.productId);
     if (!product) return { ok: false, data: { error: 'Product no longer available' } };
     if (!product.in_stock) return { ok: false, data: { error: `"${product.name}" is out of stock` } };
+
+    let price_paise = product.price_paise;
+    let dimension = null;
+    const dims = Array.isArray(product.dimensions) ? product.dimensions : [];
+    if (dims.length > 0) {
+      dimension = dims.find((d) => d.label === item.dimension);
+      if (!dimension) return { ok: false, data: { error: `Choose a size for "${product.name}"` } };
+      price_paise = dimension.price_paise;
+    }
+
     const qty = Math.max(1, Math.min(20, parseInt(item.qty, 10) || 1));
-    total += product.price_paise * qty;
-    verifiedItems.push({ productId: product.id, name: product.name, price_paise: product.price_paise, qty, message: product.customizable ? String(item.message || '').slice(0, 200) : '' });
+    total += price_paise * qty;
+    verifiedItems.push({ productId: product.id, name: product.name, price_paise, dimension: dimension?.label || null, qty, message: product.customizable ? String(item.message || '').slice(0, 200) : '' });
   }
   const orders = read(ORDERS_KEY, []);
   const orderNo = Math.max(1000, ...orders.map((o) => Number(o.order_no) || 0)) + 1;

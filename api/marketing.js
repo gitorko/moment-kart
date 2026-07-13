@@ -35,7 +35,7 @@ async function marketingHandler(req, res) {
 
   const users = await sql`SELECT email, name FROM users WHERE email = ANY(${userEmails})`;
   const products = productIds.length
-    ? await sql`SELECT id, name, price_paise, image_url FROM products WHERE id = ANY(${productIds})`
+    ? await sql`SELECT id, name, price_paise, image_url FROM products WHERE id = ANY(${productIds}::bigint[])`
     : [];
 
   let sent = 0;
