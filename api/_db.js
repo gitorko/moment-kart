@@ -57,6 +57,8 @@ export async function ensureSchema(sql) {
   // Date the UPI payment was made (customer-supplied) and the date the order was shipped (admin-stamped).
   await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at DATE`;
   await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at DATE`;
+  // Admin's reason/comment captured when marking an order fulfilled or cancelled.
+  await sql`ALTER TABLE orders ADD COLUMN IF NOT EXISTS status_note TEXT`;
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'`;
   // Up to 3 photos per product; images[0] is the cover shown on cards.
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'`;

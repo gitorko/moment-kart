@@ -14,6 +14,9 @@ export default async function handler(req, res) {
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 const validDate = (s) => (typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : todayStr());
+// Fulfilled and cancelled are terminal states: no further transitions happen on their own,
+// so they're the only statuses an admin can delete or attach a closing note to.
+const TERMINAL_STATUSES = ['fulfilled', 'cancelled'];
 
 async function ordersHandler(req, res) {
   const sql = db();
@@ -46,7 +49,7 @@ async function ordersHandler(req, res) {
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
     if (ids.length === 0) return res.status(400).json({ error: 'No order ids given' });
     // Only terminal-state orders may be deleted — active orders must run their course.
-    const deleted = await sql`DELETE FROM orders WHERE id = ANY(${ids}::bigint[]) AND status = ANY(ARRAY['fulfilled', 'cancelled']) RETURNING id`;
+    const deleted = await sql`DELETE FROM orders WHERE id = ANY(${ids}::bigint[]) AND status = ANY(${TERMINAL_STATUSES}::text[]) RETURNING id`;
     log('orders_deleted', { count: deleted.length, requested: ids.length, by: user.email });
     return res.json({ deleted: deleted.length, skipped: ids.length - deleted.length });
   }
@@ -121,7 +124,7 @@ async function ordersHandler(req, res) {
   if (req.method === 'PUT') {
     const user = requireAuth(req, res);
     if (!user) return;
-    const { id, status, courier, tracking_id, upi_ref, transaction_date } = req.body || {};
+    const { id, status, courier, tracking_id, upi_ref, transaction_date, note } = req.body || {};
 
     // Customer path: resubmit payment on their own flagged order.
     if (upi_ref !== undefined && !status) {
@@ -184,6 +187,9 @@ async function ordersHandler(req, res) {
       } catch (err) {
         logError('shipped_email_failed', err, { orderId: id });
       }
+    } else if (TERMINAL_STATUSES.includes(status)) {
+      // Closing note is optional and only tracked for the states an order won't move past on its own.
+      await sql`UPDATE orders SET status = ${status}, status_note = ${note ? String(note).trim().slice(0, 500) : null} WHERE id = ${id}`;
     } else {
       await sql`UPDATE orders SET status = ${status} WHERE id = ${id}`;
     }

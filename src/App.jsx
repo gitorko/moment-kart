@@ -4,7 +4,7 @@ import {
   AUTH_KEY, authAction, fetchProducts, saveProduct, deleteProduct, reorderProducts,
   fetchProfile, saveProfile, changePassword, placeOrder as apiPlaceOrder,
   fetchMyOrders, fetchAdminOrders, setOrderStatus as apiSetOrderStatus, resubmitPayment,
-  deleteOrders,
+  deleteOrders, TERMINAL_ORDER_STATUSES,
   fetchReviews, fetchFeaturedReviews, submitReview, fetchAdminReviews, updateReview, deleteReview,
   fetchAdminUsers, impersonateUser, sendMarketingEmail,
 } from './api.js';
@@ -2003,7 +2003,7 @@ function AdminProducts() {
 
 const ORDER_CSV_COLUMNS = [
   'id', 'order_no', 'created_at', 'status', 'user_name', 'user_email', 'items_summary',
-  'total_rupees', 'upi_ref', 'paid_at', 'courier', 'tracking_id', 'shipped_at', 'address',
+  'total_rupees', 'upi_ref', 'paid_at', 'courier', 'tracking_id', 'shipped_at', 'status_note', 'address',
 ];
 
 function csvEscape(value) {
@@ -2024,7 +2024,7 @@ function ordersToCsv(orders) {
     lines.push([
       o.id, o.order_no ?? '', o.created_at, o.status, o.user_name, o.user_email,
       o.items.map((i) => `${i.name}${i.dimension ? ` (Size: ${i.dimension})` : ''} x${i.qty}${i.message ? ` (${i.message})` : ''}`).join('; '),
-      (o.total_paise / 100).toFixed(2), o.upi_ref, o.paid_at || '', o.courier || '', o.tracking_id || '', o.shipped_at || '',
+      (o.total_paise / 100).toFixed(2), o.upi_ref, o.paid_at || '', o.courier || '', o.tracking_id || '', o.shipped_at || '', o.status_note || '',
       addressToLines(o.address),
     ].map(csvEscape).join(','));
   }
@@ -2152,7 +2152,7 @@ function AdminOrders() {
   }
 
   // Only terminal-state orders (fulfilled/cancelled) can be deleted, so only they are selectable.
-  const deletable = orders.filter((o) => o.status === 'fulfilled' || o.status === 'cancelled');
+  const deletable = orders.filter((o) => TERMINAL_ORDER_STATUSES.includes(o.status));
   const allSelected = deletable.length > 0 && selected.size === deletable.length;
 
   return (
@@ -2193,7 +2193,7 @@ function AdminOrders() {
         {slice.map((o) => (
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              {(o.status === 'fulfilled' || o.status === 'cancelled') && (
+              {TERMINAL_ORDER_STATUSES.includes(o.status) && (
                 <input
                   type="checkbox"
                   checked={selected.has(o.id)}
@@ -2267,6 +2267,12 @@ function AdminOrders() {
                     </dd>
                   </div>
                 )}
+                {TERMINAL_ORDER_STATUSES.includes(o.status) && o.status_note && (
+                  <div className="order-row">
+                    <dt>Note:</dt>
+                    <dd>{o.status_note}</dd>
+                  </div>
+                )}
                 <div className="order-row">
                   <dt>Total:</dt>
                   <dd><strong style={{ color: 'var(--ocean)' }}>{rupees(o.total_paise)}</strong></dd>
@@ -2279,7 +2285,9 @@ function AdminOrders() {
             </div>
             <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', marginTop: 10, flexWrap: 'wrap', gap: 8 }}>
               <span style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button type="button" className="btn btn-sm btn-ghost" onClick={() => printAddress(o)}>Print Address</button>
+                {(o.status === 'pending' || o.status === 'payment_issue') && (
+                  <button type="button" className="btn btn-sm btn-ghost" onClick={() => printAddress(o)}>Print Address</button>
+                )}
                 {o.status === 'pending' && (
                   <>
                     <button className="btn btn-sm" disabled={busy} onClick={() => { setShipError(''); setShipping({ orderId: o.id, courier: 'Bluedart', tracking_id: '', shipped_date: todayStr() }); }}>
@@ -2293,7 +2301,10 @@ function AdminOrders() {
                 {o.status === 'payment_issue' && (
                   <>
                     <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
-                    <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => { if (window.confirm('Cancel this order?')) setStatus(o, 'cancelled'); }}>
+                    <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => {
+                      if (!window.confirm('Cancel this order?')) return;
+                      setStatus(o, 'cancelled', { note: window.prompt('Reason for cancellation (optional):') || '' });
+                    }}>
                       {busy ? 'Updating…' : 'Cancel order'}
                     </button>
                   </>
@@ -2308,7 +2319,7 @@ function AdminOrders() {
                 )}
                 {o.status === 'shipped' && (
                   <>
-                    <button className="btn btn-sm" disabled={busy} onClick={() => setStatus(o, 'fulfilled')}>{busy ? 'Updating…' : 'Mark fulfilled ✓'}</button>
+                    <button className="btn btn-sm" disabled={busy} onClick={() => setStatus(o, 'fulfilled', { note: window.prompt('Add a note (optional):') || '' })}>{busy ? 'Updating…' : 'Mark fulfilled ✓'}</button>
                     <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
                   </>
                 )}

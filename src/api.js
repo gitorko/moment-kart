@@ -52,6 +52,10 @@ const ORDERS_KEY = 'mk-dev-orders';
 const CODES_KEY = 'mk-dev-codes';
 const REVIEWS_KEY = 'mk-dev-reviews';
 
+// Fulfilled and cancelled are terminal states: no further transitions happen on their own,
+// so they're the only statuses that can be deleted or carry a closing note.
+export const TERMINAL_ORDER_STATUSES = ['fulfilled', 'cancelled'];
+
 // Mirrors prod's numeric ids (Postgres BIGINT, returned as strings) — dev storage
 // is a plain array, so the next id is just the current max + 1.
 const nextId = (items) => String(items.reduce((m, it) => Math.max(m, Number(it.id) || 0), 0) + 1);
@@ -377,6 +381,8 @@ export async function setOrderStatus(id, status, extra = {}) {
           address: order.address,
         },
       });
+    } else if (TERMINAL_ORDER_STATUSES.includes(status)) {
+      order.status_note = extra.note ? String(extra.note).trim().slice(0, 500) : null;
     }
   }
   write(ORDERS_KEY, orders);
@@ -389,7 +395,7 @@ export async function deleteOrders(ids) {
   if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'DELETE', body: JSON.stringify({ ids }) }));
   const idSet = new Set(ids);
   const orders = read(ORDERS_KEY, []);
-  const next = orders.filter((o) => !(idSet.has(o.id) && (o.status === 'fulfilled' || o.status === 'cancelled')));
+  const next = orders.filter((o) => !(idSet.has(o.id) && TERMINAL_ORDER_STATUSES.includes(o.status)));
   write(ORDERS_KEY, next);
   const deleted = orders.length - next.length;
   return { ok: true, data: { deleted, skipped: ids.length - deleted } };
