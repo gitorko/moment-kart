@@ -163,9 +163,10 @@ async function ordersHandler(req, res) {
         `;
         if (row) {
           // Order items only store productId — look up current images for the email.
+          // Cropped thumbnail only (never the full original) — keeps the email light.
           const productIds = (row.items || []).map((i) => i.productId).filter(Boolean);
           const products = productIds.length
-            ? await sql`SELECT id, image_url FROM products WHERE id = ANY(${productIds}::bigint[])`
+            ? await sql`SELECT id, thumb_url AS image_url FROM products WHERE id = ANY(${productIds}::bigint[])`
             : [];
           const imageById = Object.fromEntries(products.map((p) => [p.id, p.image_url]));
           const items = (row.items || []).map((i) => ({ ...i, image_url: imageById[i.productId] || '' }));

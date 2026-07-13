@@ -62,6 +62,10 @@ export async function ensureSchema(sql) {
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS images JSONB NOT NULL DEFAULT '[]'`;
   // Admin-curated pick for the "Featured Keepsakes" section on the home page.
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS featured BOOLEAN NOT NULL DEFAULT FALSE`;
+  // Fixed-size crop of the cover photo, set only when the admin runs it through the
+  // crop tool — never falls back to a legacy/uncropped image. Empty means the shop
+  // grid shows no photo for that product until it's (re-)cropped.
+  await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS thumb_url TEXT NOT NULL DEFAULT ''`;
   // Optional size/variant options, e.g. [{label:"8x10", price_paise:49900}]. When present,
   // price_paise on the product row is kept as the cheapest dimension (used for card/list display).
   await sql`ALTER TABLE products ADD COLUMN IF NOT EXISTS dimensions JSONB NOT NULL DEFAULT '[]'`;

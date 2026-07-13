@@ -61,7 +61,7 @@ async function productsHandler(req, res) {
   if (req.method === 'GET') {
     // Public: the shop needs the catalog without login.
     const rows = await sql`
-      SELECT id, name, description, price_paise, image_url, images, customizable, custom_label, in_stock, tags, featured, dimensions, created_at
+      SELECT id, name, description, price_paise, image_url, images, customizable, custom_label, in_stock, tags, featured, dimensions, created_at, thumb_url
       FROM products ORDER BY sort_order ASC NULLS LAST, created_at DESC
     `;
     return res.json(rows.map((r) => ({ ...r, images: normalizeImages(r) })));
@@ -79,11 +79,11 @@ async function productsHandler(req, res) {
     const dimensions = normalizeDimensions(p);
     const pricePaise = dimensions.length > 0 ? Math.min(...dimensions.map((d) => d.price_paise)) : p.price_paise;
     const [created] = await sql`
-      INSERT INTO products (name, description, price_paise, image_url, images, customizable, custom_label, in_stock, tags, featured, dimensions, sort_order)
+      INSERT INTO products (name, description, price_paise, image_url, images, customizable, custom_label, in_stock, tags, featured, dimensions, sort_order, thumb_url)
       VALUES (${p.name}, ${p.description || ''}, ${pricePaise}, ${images[0]?.thumb || ''}, ${JSON.stringify(images)},
               ${!!p.customizable}, ${p.custom_label || 'Your message'}, ${p.in_stock !== false},
               ${JSON.stringify(normalizeTags(p.tags))}, ${!!p.featured}, ${JSON.stringify(dimensions)},
-              (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM products))
+              (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM products), ${p.thumb_url || ''})
       RETURNING id
     `;
     log('product_created', { productId: created.id, name: p.name, by: admin.email });
@@ -104,7 +104,8 @@ async function productsHandler(req, res) {
         name = ${p.name}, description = ${p.description || ''}, price_paise = ${pricePaise},
         image_url = ${images[0]?.thumb || ''}, images = ${JSON.stringify(images)}, customizable = ${!!p.customizable},
         custom_label = ${p.custom_label || 'Your message'}, in_stock = ${p.in_stock !== false},
-        tags = ${JSON.stringify(normalizeTags(p.tags))}, featured = ${!!p.featured}, dimensions = ${JSON.stringify(dimensions)}
+        tags = ${JSON.stringify(normalizeTags(p.tags))}, featured = ${!!p.featured}, dimensions = ${JSON.stringify(dimensions)},
+        thumb_url = ${p.thumb_url || ''}
       WHERE id = ${p.id}
     `;
     log('product_updated', { productId: p.id, name: p.name, inStock: p.in_stock !== false, by: admin.email });

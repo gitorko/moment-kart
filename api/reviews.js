@@ -41,11 +41,11 @@ async function reviewsHandler(req, res) {
       const status = req.query.status;
       const rows = status
         ? await sql`
-            SELECT r.*, p.name AS product_name, p.image_url AS product_image FROM reviews r
+            SELECT r.*, p.name AS product_name, p.thumb_url AS product_image FROM reviews r
             JOIN products p ON p.id = r.product_id
             WHERE r.status = ${status} ORDER BY r.created_at DESC`
         : await sql`
-            SELECT r.*, p.name AS product_name, p.image_url AS product_image FROM reviews r
+            SELECT r.*, p.name AS product_name, p.thumb_url AS product_image FROM reviews r
             JOIN products p ON p.id = r.product_id ORDER BY r.created_at DESC`;
       return res.json(rows);
     }

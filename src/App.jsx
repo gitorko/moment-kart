@@ -27,8 +27,8 @@ const BRAND_INITIALS = APP_NAME.split(/\s+/).map((w) => w[0]).join('').slice(0, 
 function OrderThumb({ item, products }) {
   if (!item) return null;
   const product = products.find((p) => p.id === item.productId);
-  if (product?.image_url) {
-    return <img src={product.image_url} alt="" className="admin-order-photo" />;
+  if (product?.thumb_url) {
+    return <img src={product.thumb_url} alt="" className="admin-order-photo" />;
   }
   if (!product) {
     return (
@@ -608,10 +608,10 @@ function ProductCard({ product, onAdd }) {
   return (
     <div className="card product-card">
       <a href={`#/product/${product.id}`} className="product-thumb" aria-label={`View ${product.name}`}>
-        {product.image_url ? (
-          <img src={product.image_url} alt={product.name} />
+        {product.thumb_url ? (
+          <img src={product.thumb_url} alt={product.name} />
         ) : (
-          <div className="img-placeholder">{BRAND_INITIALS}</div>
+          <div className="img-placeholder no-image">No Image</div>
         )}
         <span className="product-thumb-hint">🔍 View details</span>
       </a>
@@ -1464,25 +1464,30 @@ function canvasToJpeg(draw, w, h, quality) {
 
 // Drag-to-reposition cropper for one uploaded photo. Confirms with both a fixed-size
 // crop (what the admin framed) and the full original (untouched, just downscaled).
+const CROP_MAX_ZOOM = 3;
+
 function ImageCropModal({ file, onConfirm, onCancel }) {
   const [img, setImg] = useState(null);
   const [url, setUrl] = useState('');
-  const [scale, setScale] = useState(1);
+  const [baseScale, setBaseScale] = useState(1); // scale that exactly covers the crop frame
+  const [zoom, setZoom] = useState(1); // >= 1, multiplies baseScale — zooming in frees up panning on both axes
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [error, setError] = useState('');
   const dragRef = useRef(null);
+  const scale = baseScale * zoom;
 
   useEffect(() => {
     let cancelled = false;
     setImg(null);
     setError('');
+    setZoom(1);
     const objUrl = URL.createObjectURL(file);
     setUrl(objUrl);
     const image = new Image();
     image.onload = () => {
       if (cancelled) return;
       const s = Math.max(CROP_VIEW_W / image.width, CROP_VIEW_H / image.height);
-      setScale(s);
+      setBaseScale(s);
       setOffset({
         x: Math.max(0, (image.width - CROP_VIEW_W / s) / 2),
         y: Math.max(0, (image.height - CROP_VIEW_H / s) / 2),
@@ -1501,6 +1506,13 @@ function ImageCropModal({ file, onConfirm, onCancel }) {
     const maxX = Math.max(0, img.width - CROP_VIEW_W / s);
     const maxY = Math.max(0, img.height - CROP_VIEW_H / s);
     return { x: Math.min(Math.max(0, o.x), maxX), y: Math.min(Math.max(0, o.y), maxY) };
+  }
+
+  function onZoomChange(e) {
+    const nextZoom = parseFloat(e.target.value);
+    const nextScale = baseScale * nextZoom;
+    setZoom(nextZoom);
+    setOffset((o) => clamp(o, nextScale));
   }
 
   function onPointerDown(e) {
@@ -1526,7 +1538,7 @@ function ImageCropModal({ file, onConfirm, onCancel }) {
     const fullScale = Math.min(1, PRODUCT_PHOTO_MAX_EDGE / Math.max(img.width, img.height));
     const fw = Math.round(img.width * fullScale), fh = Math.round(img.height * fullScale);
     const full = canvasToJpeg((ctx) => ctx.drawImage(img, 0, 0, fw, fh), fw, fh, 0.85);
-    onConfirm({ thumb, full });
+    onConfirm({ thumb, full, cropped: true });
   }
 
   return (
@@ -1537,24 +1549,30 @@ function ImageCropModal({ file, onConfirm, onCancel }) {
       </p>
       {error && <p className="error">{error}</p>}
       {img ? (
-        <div
-          className="crop-viewport"
-          style={{ width: CROP_VIEW_W, height: CROP_VIEW_H }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          onPointerLeave={onPointerUp}
-        >
-          <img
-            src={url}
-            alt="Crop preview"
-            draggable={false}
-            style={{
-              width: img.width * scale, height: img.height * scale,
-              transform: `translate(${-offset.x * scale}px, ${-offset.y * scale}px)`,
-            }}
-          />
-        </div>
+        <>
+          <div
+            className="crop-viewport"
+            style={{ width: CROP_VIEW_W, height: CROP_VIEW_H }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerLeave={onPointerUp}
+          >
+            <img
+              src={url}
+              alt="Crop preview"
+              draggable={false}
+              style={{
+                width: img.width * scale, height: img.height * scale,
+                transform: `translate(${-offset.x * scale}px, ${-offset.y * scale}px)`,
+              }}
+            />
+          </div>
+          <div className="field" style={{ marginTop: 12, marginBottom: 0 }}>
+            <label>Zoom {zoom > 1 && '— drag to reposition sideways and up/down'}</label>
+            <input type="range" min={1} max={CROP_MAX_ZOOM} step={0.01} value={zoom} onChange={onZoomChange} />
+          </div>
+        </>
       ) : !error && <Spinner />}
       <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
         <button type="button" className="btn btn-sm" disabled={!img} onClick={confirm}>Use this photo</button>
@@ -1632,14 +1650,6 @@ function AdminProducts() {
     [next[idx], next[swapWith]] = [next[swapWith], next[idx]];
     persistOrder(next);
   }
-  function moveToTop(id) {
-    const idx = products.findIndex((p) => p.id === id);
-    if (idx <= 0) return;
-    const next = [...products];
-    const [item] = next.splice(idx, 1);
-    next.unshift(item);
-    persistOrder(next);
-  }
 
   const set = (k) => (e) =>
     setForm({ ...form, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
@@ -1679,6 +1689,7 @@ function AdminProducts() {
       price_paise: pricePaise,
       images: form.images,
       image_url: form.images[0]?.thumb || '',
+      thumb_url: form.images[0]?.cropped ? form.images[0].thumb : '',
       tags: parseTags(form.tags),
       customizable: form.customizable,
       custom_label: form.custom_label,
@@ -1703,11 +1714,18 @@ function AdminProducts() {
     setEditingId(p.id);
     setFormOpen(true);
     const dimensions = p.dimensions || [];
+    const images = (p.images && p.images.length ? p.images : (p.image_url ? [p.image_url] : [])).map(toPhoto);
+    // Re-mark the cover as "already cropped" only if it still matches the persisted
+    // thumb_url — this is how a genuine crop survives round-tripping through the
+    // backend (which strips the `cropped` flag before storing images).
+    if (images[0] && p.thumb_url && images[0].thumb === p.thumb_url) {
+      images[0] = { ...images[0], cropped: true };
+    }
     setForm({
       name: p.name,
       description: p.description,
       price: String(p.price_paise / 100),
-      images: (p.images && p.images.length ? p.images : (p.image_url ? [p.image_url] : [])).map(toPhoto),
+      images,
       tags: (p.tags || []).join(', '),
       customizable: p.customizable,
       custom_label: p.custom_label,
@@ -1945,12 +1963,11 @@ function AdminProducts() {
               <tr key={p.id}>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-sm btn-ghost" disabled={!canReorder} title="Move up" onClick={() => moveProduct(p.id, -1)}>▲</button>{' '}
-                  <button className="btn btn-sm btn-ghost" disabled={!canReorder} title="Move down" onClick={() => moveProduct(p.id, 1)}>▼</button>{' '}
-                  <button className="btn btn-sm btn-ghost" disabled={!canReorder} title="Move to top" onClick={() => moveToTop(p.id)}>⤒</button>
+                  <button className="btn btn-sm btn-ghost" disabled={!canReorder} title="Move down" onClick={() => moveProduct(p.id, 1)}>▼</button>
                 </td>
                 <td>
-                  {p.image_url
-                    ? <img src={p.image_url} alt="" style={{ width: 56, height: 42, objectFit: 'cover', borderRadius: 6 }} />
+                  {p.thumb_url
+                    ? <img src={p.thumb_url} alt="" style={{ width: 56, height: 42, objectFit: 'cover', borderRadius: 6 }} />
                     : '—'}
                 </td>
                 <td>{p.name}</td>
@@ -2555,6 +2572,8 @@ function AdminMarketing() {
   const [products, setProducts] = useState([]);
   const [selectedUsers, setSelectedUsers] = useState(() => new Set());
   const [selectedProducts, setSelectedProducts] = useState(() => new Set());
+  const [productQuery, setProductQuery] = useState('');
+  const [productDropdownOpen, setProductDropdownOpen] = useState(false);
   const [subject, setSubject] = useState('');
   const [message, setMessage] = useState('');
   const [userQuery, setUserQuery] = useState('');
@@ -2680,20 +2699,42 @@ function AdminMarketing() {
         <h2>2. Products to feature</h2>
         <div className="card" style={{ marginBottom: 24 }}>
           {products.length === 0 ? <p className="empty">No products yet</p> : (
-            <div className="field" style={{ marginBottom: 0 }}>
+            <div className="field" style={{ marginBottom: 0, position: 'relative' }}>
               <label>Products ({selectedProducts.size} selected)</label>
-              <select
-                value=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  setSelectedProducts((s) => new Set(s).add(e.target.value));
-                }}
-              >
-                <option value="">+ Add a product…</option>
-                {products.filter((p) => !selectedProducts.has(p.id)).map((p) => (
-                  <option key={p.id} value={p.id}>{p.name} — {rupees(p.price_paise)}</option>
-                ))}
-              </select>
+              <input
+                type="text"
+                placeholder="Search and add a product…"
+                value={productQuery}
+                onChange={(e) => { setProductQuery(e.target.value); setProductDropdownOpen(true); }}
+                onFocus={() => setProductDropdownOpen(true)}
+                onBlur={() => setTimeout(() => setProductDropdownOpen(false), 150)}
+              />
+              {productDropdownOpen && (() => {
+                const q = productQuery.trim().toLowerCase();
+                const options = products
+                  .filter((p) => !selectedProducts.has(p.id) && (!q || p.name.toLowerCase().includes(q)))
+                  .slice(0, 30);
+                return (
+                  <div className="dropdown-panel">
+                    {options.length === 0 ? (
+                      <div className="dropdown-empty">No matching products</div>
+                    ) : options.map((p) => (
+                      <button
+                        type="button"
+                        key={p.id}
+                        className="dropdown-option"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => {
+                          setSelectedProducts((s) => new Set(s).add(p.id));
+                          setProductQuery('');
+                        }}
+                      >
+                        {p.name} — {rupees(p.price_paise)}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })()}
               {selectedProducts.size > 0 && (
                 <div className="size-chips" style={{ marginTop: 10 }}>
                   {products.filter((p) => selectedProducts.has(p.id)).map((p) => (

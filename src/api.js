@@ -52,7 +52,9 @@ const ORDERS_KEY = 'mk-dev-orders';
 const CODES_KEY = 'mk-dev-codes';
 const REVIEWS_KEY = 'mk-dev-reviews';
 
-const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+// Mirrors prod's numeric ids (Postgres BIGINT, returned as strings) — dev storage
+// is a plain array, so the next id is just the current max + 1.
+const nextId = (items) => String(items.reduce((m, it) => Math.max(m, Number(it.id) || 0), 0) + 1);
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 // Dev admin credentials come from .env.local (ADMIN_EMAIL / ADMIN_PASSWORD —
@@ -121,7 +123,7 @@ export async function authAction(body) {
   if (body.action === 'signup') {
     if (user?.verified) return { ok: false, data: { error: 'Account already exists — please login' } };
     const next = users.filter((u) => u.email !== email);
-    next.push({ id: user?.id || uid(), email, name: body.name, password: body.password, verified: false, address: null, created_at: new Date().toISOString() });
+    next.push({ id: user?.id || nextId(users), email, name: body.name, password: body.password, verified: false, address: null, created_at: new Date().toISOString() });
     write(USERS_KEY, next);
     issueDevCode(codes, email);
     return { ok: true, data: {} };
@@ -192,7 +194,7 @@ export async function saveProduct(product, editingId) {
     const idx = products.findIndex((p) => p.id === editingId);
     if (idx >= 0) products[idx] = { ...products[idx], ...product, id: editingId };
   } else {
-    products.push({ ...product, id: uid() }); // new products default to the bottom of the shop order
+    products.push({ ...product, id: nextId(products) }); // new products default to the bottom of the shop order
   }
   write(PRODUCTS_KEY, products);
   return { ok: true, data: {} };
@@ -295,7 +297,7 @@ export async function placeOrder({ items, address, upi_ref, transaction_date }) 
   const orders = read(ORDERS_KEY, []);
   const orderNo = Math.max(1000, ...orders.map((o) => Number(o.order_no) || 0)) + 1;
   orders.unshift({
-    id: uid(), order_no: orderNo, user_email: me?.email, user_name: me?.name,
+    id: nextId(orders), order_no: orderNo, user_email: me?.email, user_name: me?.name,
     items: verifiedItems, address, total_paise: total,
     upi_ref, status: 'pending', created_at: new Date().toISOString(),
     paid_at: transaction_date || todayStr(),
@@ -461,7 +463,7 @@ export async function submitReview({ productId, rating, text }) {
   if (me.admin) return { ok: false, data: { error: 'The admin cannot review products' } };
   const reviews = read(REVIEWS_KEY, []);
   reviews.unshift({
-    id: uid(), product_id: productId, user_id: me.uid, user_name: me.name,
+    id: nextId(reviews), product_id: productId, user_id: me.uid, user_name: me.name,
     rating, text: String(text || '').slice(0, 1000),
     status: 'pending', featured: false, created_at: new Date().toISOString(),
   });
