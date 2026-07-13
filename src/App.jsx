@@ -2158,7 +2158,7 @@ function AdminOrders() {
   return (
     <div className="page">
       <h1>Admin · Orders</h1>
-      <div className="tabs" style={{ maxWidth: 680 }}>
+      <div className="tabs" style={{ maxWidth: 900 }}>
         {[['pending', 'Pending'], ['payment_issue', 'Payment Issue'], ['shipped', 'Shipped'], ['fulfilled', 'Fulfilled'], ['cancelled', 'Cancelled'], ['all', 'All']].map(([f, label]) => (
           <button key={f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
             {label}
