@@ -384,12 +384,12 @@ export async function setOrderStatus(id, status, extra = {}) {
 }
 
 // Admin: permanently delete orders (frees database space).
-// Only fulfilled orders can be deleted — active ones must run their course.
+// Only fulfilled/cancelled orders can be deleted — active ones must run their course.
 export async function deleteOrders(ids) {
   if (!IS_DEV) return toResult(authFetch('/api/orders', { method: 'DELETE', body: JSON.stringify({ ids }) }));
   const idSet = new Set(ids);
   const orders = read(ORDERS_KEY, []);
-  const next = orders.filter((o) => !(idSet.has(o.id) && o.status === 'fulfilled'));
+  const next = orders.filter((o) => !(idSet.has(o.id) && (o.status === 'fulfilled' || o.status === 'cancelled')));
   write(ORDERS_KEY, next);
   const deleted = orders.length - next.length;
   return { ok: true, data: { deleted, skipped: ids.length - deleted } };

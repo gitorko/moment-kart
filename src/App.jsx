@@ -2140,19 +2140,19 @@ function AdminOrders() {
 
   async function removeOrders(ids) {
     if (ids.length === 0) return;
-    const label = ids.length === 1 ? 'this fulfilled order' : `${ids.length} fulfilled orders`;
+    const label = ids.length === 1 ? 'this order' : `${ids.length} orders`;
     if (!window.confirm(`Permanently delete ${label}? This cannot be undone — export a CSV backup first if you need one.`)) return;
     setBusy(true);
     const { ok, data } = await deleteOrders(ids);
     setBusy(false);
     setNotice(ok
-      ? `Deleted ${data.deleted} order(s).${data.skipped ? ` ${data.skipped} skipped (only fulfilled orders can be deleted).` : ''}`
+      ? `Deleted ${data.deleted} order(s).${data.skipped ? ` ${data.skipped} skipped (only fulfilled/cancelled orders can be deleted).` : ''}`
       : data.error || 'Delete failed');
     load();
   }
 
-  // Only fulfilled orders can be deleted, so only they are selectable.
-  const deletable = orders.filter((o) => o.status === 'fulfilled');
+  // Only terminal-state orders (fulfilled/cancelled) can be deleted, so only they are selectable.
+  const deletable = orders.filter((o) => o.status === 'fulfilled' || o.status === 'cancelled');
   const allSelected = deletable.length > 0 && selected.size === deletable.length;
 
   return (
@@ -2176,7 +2176,7 @@ function AdminOrders() {
               checked={allSelected}
               onChange={() => setSelected(allSelected ? new Set() : new Set(deletable.map((o) => o.id)))}
             />
-            Select all fulfilled
+            Select all deletable
           </label>
         )}
         {selected.size > 0 && (
@@ -2193,7 +2193,7 @@ function AdminOrders() {
         {slice.map((o) => (
           <div key={o.id} className="card" style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
-              {o.status === 'fulfilled' && (
+              {(o.status === 'fulfilled' || o.status === 'cancelled') && (
                 <input
                   type="checkbox"
                   checked={selected.has(o.id)}
@@ -2299,7 +2299,12 @@ function AdminOrders() {
                   </>
                 )}
                 {o.status === 'cancelled' && (
-                  <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
+                  <>
+                    <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
+                    <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => removeOrders([o.id])}>
+                      Delete
+                    </button>
+                  </>
                 )}
                 {o.status === 'shipped' && (
                   <>

@@ -45,8 +45,8 @@ async function ordersHandler(req, res) {
     if (!user.admin) return res.status(403).json({ error: 'Admin only' });
     const ids = Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [];
     if (ids.length === 0) return res.status(400).json({ error: 'No order ids given' });
-    // Only fulfilled orders may be deleted — active orders must run their course.
-    const deleted = await sql`DELETE FROM orders WHERE id = ANY(${ids}::bigint[]) AND status = 'fulfilled' RETURNING id`;
+    // Only terminal-state orders may be deleted — active orders must run their course.
+    const deleted = await sql`DELETE FROM orders WHERE id = ANY(${ids}::bigint[]) AND status = ANY(ARRAY['fulfilled', 'cancelled']) RETURNING id`;
     log('orders_deleted', { count: deleted.length, requested: ids.length, by: user.email });
     return res.json({ deleted: deleted.length, skipped: ids.length - deleted.length });
   }
