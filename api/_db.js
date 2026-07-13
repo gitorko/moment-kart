@@ -114,6 +114,8 @@ export async function ensureSchema(sql) {
           WHERE p.id = sub.id;
         ALTER TABLE products ALTER COLUMN numeric_id SET NOT NULL;
 
+        ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_product_id_fkey;
+
         UPDATE reviews r SET product_id = p.numeric_id::text
           FROM products p WHERE r.product_id = p.id;
 
@@ -131,8 +133,6 @@ export async function ensureSchema(sql) {
             GROUP BY o2.id
           ) sub
           WHERE o.id = sub.order_id;
-
-        ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_product_id_fkey;
 
         SELECT conname INTO pk_name FROM pg_constraint WHERE conrelid = 'products'::regclass AND contype = 'p';
         IF pk_name IS NOT NULL THEN
@@ -167,11 +167,11 @@ export async function ensureSchema(sql) {
           WHERE u.id = sub.id;
         ALTER TABLE users ALTER COLUMN numeric_id SET NOT NULL;
 
-        UPDATE orders o SET user_id = u.numeric_id::text FROM users u WHERE o.user_id = u.id;
-        UPDATE reviews r SET user_id = u.numeric_id::text FROM users u WHERE r.user_id = u.id;
-
         ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_user_id_fkey;
         ALTER TABLE reviews DROP CONSTRAINT IF EXISTS reviews_user_id_fkey;
+
+        UPDATE orders o SET user_id = u.numeric_id::text FROM users u WHERE o.user_id = u.id;
+        UPDATE reviews r SET user_id = u.numeric_id::text FROM users u WHERE r.user_id = u.id;
 
         SELECT conname INTO pk_name FROM pg_constraint WHERE conrelid = 'users'::regclass AND contype = 'p';
         IF pk_name IS NOT NULL THEN
