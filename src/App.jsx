@@ -1980,7 +1980,7 @@ function AdminProducts() {
                 <td>{p.customizable ? `✓ (${p.custom_label})` : '—'}</td>
                 <td>
                   <div>{p.in_stock ? <span className="badge badge-fulfilled">in stock</span> : <span className="badge badge-oos">out of stock</span>}</div>
-                  {p.featured && <div style={{ marginTop: 4 }}><span className="badge badge-fulfilled">★ featured</span></div>}
+                  {p.featured && <div style={{ marginTop: 4 }}><span className="badge badge-fulfilled">featured</span></div>}
                 </td>
                 <td style={{ whiteSpace: 'nowrap' }}>
                   <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => startEdit(p)}>Edit</button>{' '}
@@ -2159,7 +2159,7 @@ function AdminOrders() {
     <div className="page">
       <h1>Admin · Orders</h1>
       <div className="tabs" style={{ maxWidth: 680 }}>
-        {[['pending', 'Pending'], ['payment_issue', 'Payment Issue'], ['shipped', 'Shipped'], ['fulfilled', 'Fulfilled'], ['all', 'All']].map(([f, label]) => (
+        {[['pending', 'Pending'], ['payment_issue', 'Payment Issue'], ['shipped', 'Shipped'], ['fulfilled', 'Fulfilled'], ['cancelled', 'Cancelled'], ['all', 'All']].map(([f, label]) => (
           <button key={f} className={filter === f ? 'active' : ''} onClick={() => setFilter(f)}>
             {label}
           </button>
@@ -2291,6 +2291,14 @@ function AdminOrders() {
                   </>
                 )}
                 {o.status === 'payment_issue' && (
+                  <>
+                    <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
+                    <button className="btn btn-sm btn-danger" disabled={busy} onClick={() => { if (window.confirm('Cancel this order?')) setStatus(o, 'cancelled'); }}>
+                      {busy ? 'Updating…' : 'Cancel order'}
+                    </button>
+                  </>
+                )}
+                {o.status === 'cancelled' && (
                   <button className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setStatus(o, 'pending')}>{busy ? 'Updating…' : 'Back to pending'}</button>
                 )}
                 {o.status === 'shipped' && (

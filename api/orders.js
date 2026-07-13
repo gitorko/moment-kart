@@ -143,7 +143,7 @@ async function ordersHandler(req, res) {
 
     // Admin path: status transitions.
     if (!user.admin) return res.status(403).json({ error: 'Admin only' });
-    if (!id || !['pending', 'payment_issue', 'shipped', 'fulfilled'].includes(status)) {
+    if (!id || !['pending', 'payment_issue', 'shipped', 'fulfilled', 'cancelled'].includes(status)) {
       return res.status(400).json({ error: 'Order id and a valid status are required' });
     }
     if (status === 'shipped' && (!courier || !String(tracking_id || '').trim())) {

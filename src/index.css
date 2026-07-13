@@ -87,6 +87,7 @@ a { color: inherit; text-decoration: none; }
 .badge-payment_issue { background: #f3e2e0; color: var(--danger); }
 .badge-shipped { background: #dde8ec; color: var(--ocean); }
 .badge-fulfilled { background: #e2ece7; color: var(--ok); }
+.badge-cancelled { background: #e5e1d8; color: var(--slate); }
 .badge-oos { background: #f3e2e0; color: var(--danger); }
 
 /* labeled order details */
