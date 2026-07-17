@@ -1600,6 +1600,7 @@ function AdminProducts() {
   const [editingId, setEditingId] = useState(null);
   const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState('');
+  const [listError, setListError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState({ key: 'rank', dir: 'asc' });
@@ -1640,7 +1641,12 @@ function AdminProducts() {
   // by another column, since "up/down" wouldn't map onto a visible, contiguous list.
   async function persistOrder(nextProducts) {
     setProducts(nextProducts);
-    await reorderProducts(nextProducts.map((p) => p.id));
+    try {
+      const { ok, data } = await reorderProducts(nextProducts.map((p) => p.id));
+      if (!ok) setListError(data.error || 'Could not save the new order');
+    } catch {
+      setListError('Could not save the new order — please try again');
+    }
   }
   function moveProduct(id, dir) {
     const idx = products.findIndex((p) => p.id === id);
@@ -1698,15 +1704,20 @@ function AdminProducts() {
       dimensions,
     };
     setBusy(true);
-    const { ok, data } = await saveProduct(body, editingId);
-    setBusy(false);
-    if (ok) {
-      setForm(EMPTY_PRODUCT);
-      setEditingId(null);
-      setFormOpen(false);
-      load();
-    } else {
-      setError(data.error || 'Save failed');
+    try {
+      const { ok, data } = await saveProduct(body, editingId);
+      if (ok) {
+        setForm(EMPTY_PRODUCT);
+        setEditingId(null);
+        setFormOpen(false);
+        load();
+      } else {
+        setError(data.error || 'Save failed');
+      }
+    } catch {
+      setError('Save failed — please try again');
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1754,10 +1765,17 @@ function AdminProducts() {
 
   async function remove(p) {
     if (!window.confirm(`Delete "${p.name}"?`)) return;
+    setListError('');
     setBusy(true);
-    await deleteProduct(p.id);
-    setBusy(false);
-    load();
+    try {
+      const { ok, data } = await deleteProduct(p.id);
+      if (ok) load();
+      else setListError(data.error || 'Delete failed');
+    } catch {
+      setListError('Delete failed — please try again');
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -1766,6 +1784,8 @@ function AdminProducts() {
         <h1 style={{ margin: 0 }}>Admin · Products</h1>
         <button type="button" className="btn" onClick={openAddForm}>+ Add Product</button>
       </div>
+
+      {listError && <p className="error">{listError}</p>}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', margin: '0 0 18px' }}>
         <input
